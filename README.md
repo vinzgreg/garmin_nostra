@@ -169,6 +169,25 @@ Create the bot account on your preferred instance, go to **Preferences → Devel
 | `interval_minutes` | `60` | How often the cron job runs |
 | `lookback_days` | `30` | How far back to look on first run per user |
 
+### `[storage]`
+
+| Key | Example value | Description |
+|---|---|---|
+| `db_path` | `/data/garmin_nostra.db` | SQLite database |
+| `gpx_dir` | `/data/gpx` | GPX files |
+| `map_dir` | `/data/maps` | Map images |
+| `token_dir` | `/data/tokens` | Garmin OAuth tokens (one subdirectory per user `name`) |
+
+> **Critical:** All paths must start with `/data/`. The container's only access to the host filesystem is through the volume mount `~/data/garminnostra → /data`. Do **not** use `~`, `~/data/...`, `/home/vinz/...`, or any other host path — those paths do not exist inside the container and the token/file lookup will silently fail.
+>
+> The corresponding host paths are:
+> | Container path | Host path |
+> |---|---|
+> | `/data/garmin_nostra.db` | `~/data/garminnostra/garmin_nostra.db` |
+> | `/data/gpx/` | `~/data/garminnostra/gpx/` |
+> | `/data/maps/` | `~/data/garminnostra/maps/` |
+> | `/data/tokens/<name>/` | `~/data/garminnostra/tokens/<name>/` |
+
 ### `[caldav]` *(optional)*
 
 Remove this section to disable CalDAV globally. Individual users also need `caldav_enabled = true`.
@@ -329,12 +348,25 @@ gpxpy  staticmap  Pillow
 
 ## Troubleshooting
 
-**Garmin MFA / 2FA**
-On first run the container must be able to complete authentication. If your account uses MFA you will need to pre-authenticate interactively:
+**Garmin authentication fails (401)**
+Garmin's SSO can block automated credential logins from servers. The solution is to generate OAuth tokens interactively inside the container (where `garth` is already installed) and persist them to the data volume:
+
 ```bash
-docker compose run --rm garmin-nostra python3 /app/src/garmin.py /app/config.toml
+docker exec -it garmin-nostra python3 -c "import garth, getpass; garth.login('<garmin_username>', getpass.getpass('password: ')); garth.save('/data/tokens/<name>')"
 ```
-Follow any prompts; the token is then cached in `data/tokens/<name>/` for future headless runs.
+
+Replace `<garmin_username>` and `<name>` (the user's `name` from `config.toml`). You will be prompted for the password. The tokens are written to `/data/tokens/<name>/` which is persisted on the host under `~/data/garminnostra/tokens/<name>/`.
+
+After this, the next sync will load the saved tokens and skip the credential login entirely.
+
+If you already have working tokens from a previous installation, you can copy them directly:
+
+```bash
+cp -r /old/path/tokens/<name> ~/data/garminnostra/tokens/<name>
+```
+
+**Garmin MFA / 2FA**
+The interactive `garth.login()` command above also handles MFA — it will prompt for the one-time code if required.
 
 **Map not attached**
 The `staticmap` library fetches tiles from `tile.openstreetmap.org`. Make sure the container has outbound internet access. Indoor activities without GPS will not produce a map.
