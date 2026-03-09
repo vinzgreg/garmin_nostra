@@ -4,7 +4,7 @@ services:
     container_name: garmin-nostra
     restart: unless-stopped
     volumes:
-      - ./data:/data
+      - ~/data/garminnostra:/data
       - ./config.toml:/app/config.toml:ro
     environment:
       - CONFIG_FILE=/app/config.toml
