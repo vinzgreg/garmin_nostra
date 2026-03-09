@@ -17,16 +17,15 @@ print(cfg.get('sync', {}).get('interval_minutes', 60))
 
 echo "garmin-nostra: sync interval = ${INTERVAL} min"
 
-# Write crontab
+# Write crontab (log to stdout/stderr so docker logs shows cron runs)
 CRON_EXPR="*/${INTERVAL} * * * *"
-echo "${CRON_EXPR} python3 /app/src/sync.py /app/config.toml >> /var/log/garmin-nostra.log 2>&1" \
+echo "${CRON_EXPR} root python3 /app/src/sync.py /app/config.toml >> /proc/1/fd/1 2>> /proc/1/fd/2" \
     > /etc/cron.d/garmin-nostra
 chmod 0644 /etc/cron.d/garmin-nostra
-crontab /etc/cron.d/garmin-nostra
 
-# Initial sync on startup
+# Initial sync on startup (non-fatal so cron daemon always starts)
 echo "Running initial sync..."
-python3 /app/src/sync.py /app/config.toml
+python3 /app/src/sync.py /app/config.toml || echo "Initial sync failed, cron will retry."
 
 echo "Starting cron daemon..."
 cron -f
