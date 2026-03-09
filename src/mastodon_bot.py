@@ -58,7 +58,7 @@ class MastodonBot:
         self._client.status_post(
             text,
             media_ids=media_ids or None,
-            visibility="direct",
+            visibility="unlisted",
         )
         logger.info(
             "Mastodon-DM gesendet an %s für Aktivität %s.",

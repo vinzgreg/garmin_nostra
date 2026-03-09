@@ -133,10 +133,6 @@ def build_mastodon_message(handle: str, activity: dict[str, Any]) -> str:
 
     lines: list[str] = []
 
-    # Mention (must appear in DM so Mastodon routes it)
-    lines.append(handle)
-    lines.append("")
-
     # Header
     lines.append(f"{emoji} {name} – {fmt_date(dt)}, {fmt_time(dt)} Uhr")
 
@@ -165,6 +161,6 @@ def build_mastodon_message(handle: str, activity: dict[str, Any]) -> str:
         lines.append("  ".join(secondary))
 
     lines.append("")
-    lines.append(f"{hashtag} #Garmin")
+    lines.append(f"{hashtag} #GarminNostra {handle}")
 
     return "\n".join(lines)

@@ -72,14 +72,83 @@ $EDITOR config.toml
 ### 2. Create the data directory
 
 ```bash
-mkdir -p data/gpx data/maps data/tokens
+mkdir -p ~/data/garminnostra
 ```
 
-### 3. Build and run
+### 3. Build and start
 
 ```bash
-docker compose up -d
+docker compose up -d --build
 docker compose logs -f
+```
+
+On first start the container runs an immediate sync, then schedules a cron job at the configured `interval_minutes`.
+
+---
+
+## Operations
+
+### Logs
+
+```bash
+# Container output (startup messages, cron daemon)
+docker logs garmin-nostra -f
+
+# Sync script output (all cron runs + initial sync)
+docker exec garmin-nostra tail -f /var/log/garmin-nostra.log
+```
+
+### Manual sync
+
+Trigger a sync immediately without waiting for the next cron run:
+
+```bash
+docker exec garmin-nostra python3 /app/src/sync.py /app/config.toml
+```
+
+### Inspect the database
+
+```bash
+# Open an interactive SQLite shell
+docker exec -it garmin-nostra sqlite3 /data/garmin_nostra.db
+
+# Recent activities (last 20)
+docker exec garmin-nostra sqlite3 /data/garmin_nostra.db \
+  "SELECT garmin_activity_id, user_id, start_time_utc, activity_type
+   FROM activities ORDER BY start_time_utc DESC LIMIT 20;"
+
+# Check which activities have been posted to Mastodon
+docker exec garmin-nostra sqlite3 /data/garmin_nostra.db \
+  "SELECT garmin_activity_id, user_id, mastodon_posted, caldav_pushed
+   FROM activities ORDER BY start_time_utc DESC LIMIT 20;"
+
+# Pending Mastodon posts
+docker exec garmin-nostra sqlite3 /data/garmin_nostra.db \
+  "SELECT u.name, a.garmin_activity_id, a.activity_type, a.start_time_utc
+   FROM activities a JOIN users u ON a.user_id = u.id
+   WHERE a.mastodon_posted = 0 ORDER BY a.start_time_utc;"
+```
+
+### Apply configuration changes
+
+`config.toml` is mounted read-only; edit it on the host then restart:
+
+```bash
+docker compose restart garmin-nostra
+```
+
+A change to `interval_minutes` requires a restart so the new cron schedule is written.
+
+### Rebuild after code changes
+
+```bash
+docker compose up -d --build
+```
+
+### Stop / remove
+
+```bash
+docker compose down          # stop and remove the container (data on host is kept)
 ```
 
 ---
@@ -132,7 +201,7 @@ One block per Garmin Connect account:
 ## Data directory layout
 
 ```
-data/
+~/data/garminnostra/
 ├── garmin_nostra.db      # SQLite database
 ├── gpx/
 │   ├── alice/
@@ -149,7 +218,7 @@ data/
     └── bob/
 ```
 
-The `data/` directory is bind-mounted from the host so all files survive container rebuilds.
+The data directory is bind-mounted from the host (`~/data/garminnostra` by default — change the left side of the volume in `docker-compose.yml` to relocate it). All files survive container rebuilds.
 
 ---
 
