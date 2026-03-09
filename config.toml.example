@@ -1,0 +1,48 @@
+# garmin-nostra — example configuration
+# Copy this to config.toml and fill in your credentials.
+# config.toml is git-ignored; this file is safe to commit.
+
+# ── Mastodon bot ────────────────────────────────────────────────────────────
+[bot]
+mastodon_api_base_url = "https://mastodon.social"
+mastodon_access_token  = "your_bot_access_token"
+
+# ── Sync behaviour ──────────────────────────────────────────────────────────
+[sync]
+# How often the cron job runs (minutes)
+interval_minutes = 60
+# How far back to look on the very first run per user
+lookback_days = 30
+
+# ── Optional shared CalDAV server ───────────────────────────────────────────
+# Remove or leave empty to disable CalDAV globally.
+# Per-user opt-in via caldav_enabled = true in each [[users]] block.
+[caldav]
+url           = "https://your-nextcloud.example.com/remote.php/dav"
+username      = "nextcloud_user"
+password      = "nextcloud_password"
+calendar_name = "Fitness"
+
+# ── Storage ─────────────────────────────────────────────────────────────────
+[storage]
+db_path   = "/data/garmin_nostra.db"
+gpx_dir   = "/data/gpx"
+map_dir   = "/data/maps"
+token_dir = "/data/tokens"
+
+# ── Users ───────────────────────────────────────────────────────────────────
+# Add one [[users]] block per Garmin Connect account.
+
+[[users]]
+name             = "alice"
+garmin_username  = "alice@example.com"
+garmin_password  = "garmin_password_alice"
+mastodon_handle  = "@alice@fosstodon.org"
+caldav_enabled   = true
+
+[[users]]
+name             = "bob"
+garmin_username  = "bob@example.com"
+garmin_password  = "garmin_password_bob"
+mastodon_handle  = "@bob@mastodon.social"
+caldav_enabled   = false
