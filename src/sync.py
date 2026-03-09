@@ -125,7 +125,8 @@ def process_user(
             # ── Mastodon DM ────────────────────────────────────────────────
             if handle and not activity_row.get("mastodon_posted"):
                 try:
-                    bot.post_activity(handle, activity_row, map_path)
+                    bot.post_activity(handle, activity_row, map_path,
+                                      public=user_cfg.get("mastodon_public", False))
                     store.mark_mastodon_posted(user_id, garmin_id)
                 except Exception as exc:
                     logger.error("[%s] Mastodon fehlgeschlagen für %s: %s", name, garmin_id, exc)

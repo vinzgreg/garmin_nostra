@@ -33,10 +33,12 @@ class MastodonBot:
         mastodon_handle: str,
         activity: dict[str, Any],
         map_image_path: Path | None = None,
+        public: bool = False,
     ) -> None:
         """
-        Send a direct mention to *mastodon_handle* with the activity summary.
+        Send a mention to *mastodon_handle* with the activity summary.
         Attaches a map image if *map_image_path* exists.
+        Use *public=True* for a public post, otherwise posts as unlisted.
         """
         text = build_mastodon_message(mastodon_handle, activity)
         logger.debug("Mastodon message:\n%s", text)
@@ -58,7 +60,7 @@ class MastodonBot:
         self._client.status_post(
             text,
             media_ids=media_ids or None,
-            visibility="unlisted",
+            visibility="public" if public else "unlisted",
         )
         logger.info(
             "Mastodon-DM gesendet an %s für Aktivität %s.",

@@ -6,7 +6,7 @@ For each new activity it:
 - stores all metrics in a local SQLite database
 - downloads and saves the GPX file
 - renders a map image of the GPS track (OpenStreetMap tiles)
-- sends a **private Mastodon DM** to the user with key stats and the map
+- posts a Mastodon mention to the user with key stats and the map (public or unlisted, per-user configurable)
 - optionally pushes a CalDAV event to a Nextcloud calendar
 
 Messages and calendar entries are formatted in **German** with metric units.
@@ -18,7 +18,7 @@ Messages and calendar entries are formatted in **German** with metric units.
 | Feature | Details |
 |---|---|
 | Multi-user | One `[[users]]` block per Garmin account |
-| Mastodon DM | Bot sends direct mention; never appears on public timeline |
+| Mastodon post | Bot mentions the user; visibility is `public` or `unlisted` per user |
 | Activity stats | Duration, distance, pace/speed, elevation, power, heart rate |
 | Map image | GPX track rendered as PNG, attached to the DM |
 | CalDAV | Optional per-user; pushes VEVENT to a Nextcloud calendar |
@@ -30,28 +30,24 @@ Messages and calendar entries are formatted in **German** with metric units.
 
 ## Message format
 
-The bot sends a direct Mastodon mention (visibility: `direct`) to each user:
+The bot posts a Mastodon mention to each user. Visibility is `unlisted` by default (boostable, but not on the public timeline); set `mastodon_public = true` for fully public posts.
 
 **Running example:**
 ```
-@alice@fosstodon.org
-
 🏃 Morgenlauf – Di., 04. März 2025, 07:15 Uhr
 ⏱ 45:32  📏 8,50 km  💨 5:21 min/km
 📈 115 m Anstieg  ❤️ Ø 148 bpm
 
-#Laufen #Garmin
+#Laufen #GarminNostra @alice@fosstodon.org
 ```
 
 **Cycling example:**
 ```
-@bob@mastodon.social
-
 🚴 Nachmittagsfahrt – Di., 04. März 2025, 14:30 Uhr
 ⏱ 1:12:40  📏 38,20 km  💨 31,6 km/h
 📈 540 m Anstieg  ⚡ Ø 210 W  ❤️ Ø 142 bpm
 
-#Radfahren #Garmin
+#Radfahren #GarminNostra @bob@mastodon.social
 ```
 
 Attached: a 800×600 PNG map of the GPS track.
@@ -193,7 +189,8 @@ One block per Garmin Connect account:
 | `name` | ✓ | Unique identifier used for file/token paths |
 | `garmin_username` | ✓ | Garmin Connect e-mail |
 | `garmin_password` | ✓ | Garmin Connect password |
-| `mastodon_handle` | — | `@user@instance` — the bot will DM this handle |
+| `mastodon_handle` | — | `@user@instance` — the bot will mention this handle |
+| `mastodon_public` | `false` | `true` = public post, `false` = unlisted (boostable but not on public timeline) |
 | `caldav_enabled` | `false` | Set `true` to push CalDAV events for this user |
 
 ---
@@ -309,7 +306,7 @@ ORDER BY a.start_time_utc;
 | `src/storage.py` | SQLite store — users, activities, sync audit log |
 | `src/format.py` | German formatting: dates, numbers, pace, message builder |
 | `src/map_render.py` | GPX → PNG via `staticmap` (OSM tiles) |
-| `src/mastodon_bot.py` | Bot that sends DM mentions with optional map attachment |
+| `src/mastodon_bot.py` | Bot that posts mentions with optional map attachment (public or unlisted) |
 | `src/caldav_push.py` | Builds VEVENT and pushes to Nextcloud CalDAV |
 
 ---
@@ -342,8 +339,8 @@ Follow any prompts; the token is then cached in `data/tokens/<name>/` for future
 **Map not attached**
 The `staticmap` library fetches tiles from `tile.openstreetmap.org`. Make sure the container has outbound internet access. Indoor activities without GPS will not produce a map.
 
-**Mastodon DM not visible**
-Ensure the bot account has sent a follow request to the user (or the user follows the bot). On some instances DMs from unfollowed accounts land in filtered notifications.
+**Mastodon post not visible**
+For `unlisted` posts, the post appears in the mentioned user's notifications and on the bot's profile, but not on the public timeline. To make posts appear publicly, set `mastodon_public = true` for that user. On some instances, mentions from unfollowed accounts land in filtered notifications.
 
 **CalDAV calendar not found**
 The calendar must already exist in Nextcloud. The error message lists available calendar names.
