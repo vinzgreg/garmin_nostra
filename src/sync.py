@@ -31,6 +31,16 @@ logging.basicConfig(
 )
 logger = logging.getLogger("sync")
 
+_LOG_LEVELS = {"debug": logging.DEBUG, "info": logging.INFO, "error": logging.ERROR}
+
+
+def _set_log_level(level_str: str) -> None:
+    level = _LOG_LEVELS.get(level_str.lower())
+    if level is None:
+        logger.warning("Unknown log_level '%s', using INFO.", level_str)
+        return
+    logging.getLogger().setLevel(level)
+
 
 def _configure_log_file(path: str) -> None:
     log_path = Path(path)
@@ -217,6 +227,8 @@ def run(config_path: str) -> None:
     socket.setdefaulttimeout(cfg.get("sync", {}).get("request_timeout_s", 30))
 
     storage_cfg = cfg.get("storage", {})
+    if level_str := storage_cfg.get("log_level"):
+        _set_log_level(level_str)
     if log_file := storage_cfg.get("log_file"):
         _configure_log_file(log_file)
 
