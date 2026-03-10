@@ -110,6 +110,12 @@ docker exec garmin-nostra python3 /app/src/sync.py /app/config.toml
 # Open an interactive SQLite shell
 docker exec -it garmin-nostra sqlite3 /data/garmin_nostra.db
 
+# Total activity count and number of users
+docker exec garmin-nostra sqlite3 /data/garmin_nostra.db \
+  "SELECT count(distinct garmin_activity_id) as activity_count,
+          count(distinct user_id) as unique_users
+   FROM activities;"
+
 # Recent activities (last 20)
 docker exec garmin-nostra sqlite3 /data/garmin_nostra.db \
   "SELECT garmin_activity_id, user_id, start_time_utc, activity_type
