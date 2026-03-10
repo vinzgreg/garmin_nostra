@@ -76,18 +76,19 @@ def _build_vevent(activity: dict[str, Any]) -> bytes:
 
 class CalDAVPusher:
     def __init__(
-        self, url: str, username: str, password: str, calendar_name: str
+        self, url: str, username: str, password: str, calendar_name: str, timeout: int = 30
     ) -> None:
         self._url           = url
         self._username      = username
         self._password      = password
         self._calendar_name = calendar_name
+        self._timeout       = timeout
         self._calendar: caldav.Calendar | None = None
 
     def _get_calendar(self) -> caldav.Calendar:
         if self._calendar is not None:
             return self._calendar
-        client    = caldav.DAVClient(url=self._url, username=self._username, password=self._password)
+        client    = caldav.DAVClient(url=self._url, username=self._username, password=self._password, timeout=self._timeout)
         principal = client.principal()
         calendars = principal.calendars()
         for cal in calendars:

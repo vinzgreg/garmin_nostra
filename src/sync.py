@@ -42,7 +42,7 @@ def load_config(path: str) -> dict:
         return tomllib.load(f)
 
 
-def _build_caldav_pusher(cfg: dict) -> CalDAVPusher | None:
+def _build_caldav_pusher(cfg: dict, timeout: int = 30) -> CalDAVPusher | None:
     caldav_cfg = cfg.get("caldav", {})
     if not caldav_cfg.get("url"):
         return None
@@ -51,6 +51,7 @@ def _build_caldav_pusher(cfg: dict) -> CalDAVPusher | None:
         username=caldav_cfg["username"],
         password=caldav_cfg["password"],
         calendar_name=caldav_cfg.get("calendar_name", "Fitness"),
+        timeout=timeout,
     )
 
 
@@ -60,6 +61,7 @@ def process_user(
     bot: MastodonBot,
     caldav_pusher: CalDAVPusher | None,
     lookback_days: int,
+    request_timeout: int = 30,
 ) -> None:
     name   = user_cfg["name"]
     handle = user_cfg.get("mastodon_handle")
@@ -83,7 +85,7 @@ def process_user(
     found = processed = 0
 
     try:
-        activities = garmin.get_activities_since(since)
+        activities = garmin.get_activities_since(since, timeout=request_timeout * 4)
         found = len(activities)
 
         # Process oldest-first so last_sync advances monotonically
@@ -102,7 +104,7 @@ def process_user(
                 gpx_data = None
                 gpx_path = None
                 try:
-                    gpx_data = garmin.get_gpx(garmin_id)
+                    gpx_data = garmin.get_gpx(garmin_id, timeout=request_timeout)
                     gpx_path = store.save_gpx(name, garmin_id, gpx_data)
                 except Exception as exc:
                     logger.warning("[%s] GPX download failed for %s: %s", name, garmin_id, exc)
@@ -110,7 +112,7 @@ def process_user(
                 map_path = None
                 if gpx_data:
                     map_path = store.map_path(name, garmin_id)
-                    map_path = render_map(gpx_data, map_path)
+                    map_path = render_map(gpx_data, map_path, timeout=request_timeout)
 
                 activity_row = store.save_activity(user_id, act, gpx_path)
                 logger.info("[%s] Neue Aktivität gespeichert: %s", name, garmin_id)
@@ -166,16 +168,18 @@ def run(config_path: str) -> None:
         token_dir=storage_cfg.get("token_dir", "/data/tokens"),
     )
 
+    sync_cfg      = cfg.get("sync", {})
+    lookback_days  = sync_cfg.get("lookback_days", 30)
+    request_timeout = sync_cfg.get("request_timeout_s", 30)
+
     bot_cfg = cfg["bot"]
     bot = MastodonBot(
         api_base_url=bot_cfg["mastodon_api_base_url"],
         access_token=bot_cfg["mastodon_access_token"],
+        request_timeout=request_timeout,
     )
 
-    caldav_pusher = _build_caldav_pusher(cfg)
-
-    sync_cfg     = cfg.get("sync", {})
-    lookback_days = sync_cfg.get("lookback_days", 30)
+    caldav_pusher = _build_caldav_pusher(cfg, timeout=request_timeout)
 
     users = cfg.get("users", [])
     if not users:
@@ -183,7 +187,7 @@ def run(config_path: str) -> None:
 
     for user_cfg in users:
         try:
-            process_user(user_cfg, store, bot, caldav_pusher, lookback_days)
+            process_user(user_cfg, store, bot, caldav_pusher, lookback_days, request_timeout)
         except Exception as exc:
             logger.error("Unbehandelter Fehler bei Benutzer %s: %s", user_cfg.get("name"), exc)
 
