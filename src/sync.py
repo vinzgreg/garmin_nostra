@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import fcntl
 import logging
+import os
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -35,6 +37,21 @@ def _configure_log_file(path: str) -> None:
     handler = logging.FileHandler(log_path)
     handler.setFormatter(logging.Formatter(LOG_FORMAT, datefmt=LOG_DATEFMT))
     logging.getLogger().addHandler(handler)
+
+
+_LOCK_FILE = "/tmp/garmin-nostra-sync.lock"
+
+
+def _acquire_lock() -> int:
+    """Open and exclusively lock a file. Returns the fd, or exits if already locked."""
+    fd = os.open(_LOCK_FILE, os.O_CREAT | os.O_WRONLY)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        logger.warning("Another sync is already running — skipping.")
+        os.close(fd)
+        sys.exit(0)
+    return fd
 
 
 def load_config(path: str) -> dict:
@@ -155,6 +172,7 @@ def process_user(
 
 
 def run(config_path: str) -> None:
+    lock_fd = _acquire_lock()
     cfg = load_config(config_path)
 
     storage_cfg = cfg.get("storage", {})
@@ -192,6 +210,8 @@ def run(config_path: str) -> None:
             logger.error("Unbehandelter Fehler bei Benutzer %s: %s", user_cfg.get("name"), exc)
 
     store.close()
+    fcntl.flock(lock_fd, fcntl.LOCK_UN)
+    os.close(lock_fd)
 
 
 if __name__ == "__main__":
