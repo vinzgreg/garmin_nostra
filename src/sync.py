@@ -70,7 +70,7 @@ def process_user(
     # Determine sync window
     since    = store.get_last_sync_time(user_id)
     earliest = datetime.now(timezone.utc) - timedelta(days=lookback_days)
-    since    = max(since, earliest)
+    since    = min(since, earliest)
     logger.info("[%s] Syncing activities since %s.", name, since.isoformat())
 
     garmin = GarminClient(
