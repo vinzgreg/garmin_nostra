@@ -26,6 +26,7 @@ class MastodonBot:
             access_token=access_token,
             api_base_url=api_base_url,
             request_timeout=request_timeout,
+            ratelimit_method="throw",
         )
         logger.info("Mastodon bot initialised (%s).", api_base_url)
 

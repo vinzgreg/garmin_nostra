@@ -25,7 +25,7 @@ LOG_FORMAT = "%(asctime)s %(levelname)-8s %(name)s: %(message)s"
 LOG_DATEFMT = "%Y-%m-%dT%H:%M:%S"
 
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.INFO,
     format=LOG_FORMAT,
     datefmt=LOG_DATEFMT,
 )
@@ -81,6 +81,7 @@ def process_user(
     lookback_days: int,
     request_timeout: int = 30,
     gpx_max_age_days: int | None = None,
+    mastodon_max_age_days: int | None = None,
 ) -> None:
     name   = user_cfg["name"]
     handle = user_cfg.get("mastodon_handle")
@@ -122,18 +123,18 @@ def process_user(
             existing = store.get_activity(user_id, garmin_id)
             logger.debug("[%s] DB lookup done: %s", name, "exists" if existing else "new")
 
+            start_str = act.get("startTimeGMT") or act.get("startTimeLocal", "")
+            try:
+                act_time = datetime.fromisoformat(
+                    start_str.replace(" ", "T")
+                ).replace(tzinfo=timezone.utc)
+            except (ValueError, AttributeError):
+                act_time = None
+
             if existing is None:
                 # ── New activity — download, store, then integrate ──────────
                 gpx_data = None
                 gpx_path = None
-
-                start_str = act.get("startTimeGMT") or act.get("startTimeLocal", "")
-                try:
-                    act_time = datetime.fromisoformat(
-                        start_str.replace(" ", "T")
-                    ).replace(tzinfo=timezone.utc)
-                except (ValueError, AttributeError):
-                    act_time = None
 
                 skip_gpx = (
                     gpx_max_age_days is not None
@@ -181,7 +182,12 @@ def process_user(
                     logger.error("[%s] CalDAV fehlgeschlagen für %s: %s", name, garmin_id, exc)
 
             # ── Mastodon DM ────────────────────────────────────────────────
-            if handle and not activity_row.get("mastodon_posted"):
+            skip_mastodon = (
+                mastodon_max_age_days is not None
+                and act_time is not None
+                and act_time < datetime.now(timezone.utc) - timedelta(days=mastodon_max_age_days)
+            )
+            if handle and not activity_row.get("mastodon_posted") and not skip_mastodon:
                 logger.debug("[%s] Posting Mastodon for %s", name, garmin_id)
                 try:
                     bot.post_activity(handle, activity_row, map_path,
@@ -224,7 +230,8 @@ def run(config_path: str) -> None:
     sync_cfg        = cfg.get("sync", {})
     lookback_days   = sync_cfg.get("lookback_days", 30)
     request_timeout = sync_cfg.get("request_timeout_s", 30)
-    gpx_max_age_days = sync_cfg.get("gpx_max_age_days", None)
+    gpx_max_age_days      = sync_cfg.get("gpx_max_age_days", None)
+    mastodon_max_age_days = sync_cfg.get("mastodon_max_age_days", None)
 
     bot_cfg = cfg["bot"]
     bot = MastodonBot(
@@ -241,7 +248,7 @@ def run(config_path: str) -> None:
 
     for user_cfg in users:
         try:
-            process_user(user_cfg, store, bot, caldav_pusher, lookback_days, request_timeout, gpx_max_age_days)
+            process_user(user_cfg, store, bot, caldav_pusher, lookback_days, request_timeout, gpx_max_age_days, mastodon_max_age_days)
         except Exception as exc:
             logger.error("Unbehandelter Fehler bei Benutzer %s: %s", user_cfg.get("name"), exc)
 
