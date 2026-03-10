@@ -80,6 +80,7 @@ def process_user(
     caldav_pusher: CalDAVPusher | None,
     lookback_days: int,
     request_timeout: int = 30,
+    gpx_max_age_days: int | None = None,
 ) -> None:
     name   = user_cfg["name"]
     handle = user_cfg.get("mastodon_handle")
@@ -123,11 +124,29 @@ def process_user(
                 # ── New activity — download, store, then integrate ──────────
                 gpx_data = None
                 gpx_path = None
+
+                start_str = act.get("startTimeGMT") or act.get("startTimeLocal", "")
                 try:
-                    gpx_data = garmin.get_gpx(garmin_id, timeout=request_timeout)
-                    gpx_path = store.save_gpx(name, garmin_id, gpx_data)
-                except Exception as exc:
-                    logger.warning("[%s] GPX download failed for %s: %s", name, garmin_id, exc)
+                    act_time = datetime.fromisoformat(
+                        start_str.replace(" ", "T")
+                    ).replace(tzinfo=timezone.utc)
+                except (ValueError, AttributeError):
+                    act_time = None
+
+                skip_gpx = (
+                    gpx_max_age_days is not None
+                    and act_time is not None
+                    and act_time < datetime.now(timezone.utc) - timedelta(days=gpx_max_age_days)
+                )
+
+                if skip_gpx:
+                    logger.debug("[%s] Skipping GPX for old activity %s.", name, garmin_id)
+                else:
+                    try:
+                        gpx_data = garmin.get_gpx(garmin_id, timeout=request_timeout)
+                        gpx_path = store.save_gpx(name, garmin_id, gpx_data)
+                    except Exception as exc:
+                        logger.warning("[%s] GPX download failed for %s: %s", name, garmin_id, exc)
 
                 map_path = None
                 if gpx_data:
@@ -194,9 +213,10 @@ def run(config_path: str) -> None:
         token_dir=storage_cfg.get("token_dir", "/data/tokens"),
     )
 
-    sync_cfg      = cfg.get("sync", {})
-    lookback_days  = sync_cfg.get("lookback_days", 30)
+    sync_cfg        = cfg.get("sync", {})
+    lookback_days   = sync_cfg.get("lookback_days", 30)
     request_timeout = sync_cfg.get("request_timeout_s", 30)
+    gpx_max_age_days = sync_cfg.get("gpx_max_age_days", None)
 
     bot_cfg = cfg["bot"]
     bot = MastodonBot(
@@ -213,7 +233,7 @@ def run(config_path: str) -> None:
 
     for user_cfg in users:
         try:
-            process_user(user_cfg, store, bot, caldav_pusher, lookback_days, request_timeout)
+            process_user(user_cfg, store, bot, caldav_pusher, lookback_days, request_timeout, gpx_max_age_days)
         except Exception as exc:
             logger.error("Unbehandelter Fehler bei Benutzer %s: %s", user_cfg.get("name"), exc)
 
