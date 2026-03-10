@@ -7,6 +7,7 @@ import logging
 import os
 import socket
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -92,6 +93,7 @@ def process_user(
     request_timeout: int = 30,
     gpx_max_age_days: int | None = None,
     mastodon_max_age_days: int | None = None,
+    mastodon_post_delay_s: float = 2.0,
 ) -> None:
     name   = user_cfg["name"]
     handle = user_cfg.get("mastodon_handle")
@@ -203,6 +205,8 @@ def process_user(
                     bot.post_activity(handle, activity_row, map_path,
                                       public=user_cfg.get("mastodon_public", False))
                     store.mark_mastodon_posted(user_id, garmin_id)
+                    if mastodon_post_delay_s > 0:
+                        time.sleep(mastodon_post_delay_s)
                 except Exception as exc:
                     logger.error("[%s] Mastodon fehlgeschlagen für %s: %s", name, garmin_id, exc)
             logger.debug("[%s] Activity %s done", name, garmin_id)
@@ -242,8 +246,9 @@ def run(config_path: str) -> None:
     sync_cfg        = cfg.get("sync", {})
     lookback_days   = sync_cfg.get("lookback_days", 30)
     request_timeout = sync_cfg.get("request_timeout_s", 30)
-    gpx_max_age_days      = sync_cfg.get("gpx_max_age_days", None)
-    mastodon_max_age_days = sync_cfg.get("mastodon_max_age_days", None)
+    gpx_max_age_days        = sync_cfg.get("gpx_max_age_days", None)
+    mastodon_max_age_days   = sync_cfg.get("mastodon_max_age_days", None)
+    mastodon_post_delay_s   = float(sync_cfg.get("mastodon_post_delay_s", 2.0))
 
     bot_cfg = cfg["bot"]
     bot = MastodonBot(
@@ -260,7 +265,7 @@ def run(config_path: str) -> None:
 
     for user_cfg in users:
         try:
-            process_user(user_cfg, store, bot, caldav_pusher, lookback_days, request_timeout, gpx_max_age_days, mastodon_max_age_days)
+            process_user(user_cfg, store, bot, caldav_pusher, lookback_days, request_timeout, gpx_max_age_days, mastodon_max_age_days, mastodon_post_delay_s)
         except Exception as exc:
             logger.error("Unbehandelter Fehler bei Benutzer %s: %s", user_cfg.get("name"), exc)
 
