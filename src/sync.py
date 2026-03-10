@@ -18,12 +18,23 @@ from caldav_push import CalDAVPusher
 from mastodon_bot import MastodonBot
 from map_render import render_map
 
+LOG_FORMAT = "%(asctime)s %(levelname)-8s %(name)s: %(message)s"
+LOG_DATEFMT = "%Y-%m-%dT%H:%M:%S"
+
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
-    datefmt="%Y-%m-%dT%H:%M:%S",
+    format=LOG_FORMAT,
+    datefmt=LOG_DATEFMT,
 )
 logger = logging.getLogger("sync")
+
+
+def _configure_log_file(path: str) -> None:
+    log_path = Path(path)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    handler = logging.FileHandler(log_path)
+    handler.setFormatter(logging.Formatter(LOG_FORMAT, datefmt=LOG_DATEFMT))
+    logging.getLogger().addHandler(handler)
 
 
 def load_config(path: str) -> dict:
@@ -145,6 +156,9 @@ def run(config_path: str) -> None:
     cfg = load_config(config_path)
 
     storage_cfg = cfg.get("storage", {})
+    if log_file := storage_cfg.get("log_file"):
+        _configure_log_file(log_file)
+
     store = ActivityStore(
         db_path=storage_cfg.get("db_path",   "/data/garmin_nostra.db"),
         gpx_dir=storage_cfg.get("gpx_dir",   "/data/gpx"),

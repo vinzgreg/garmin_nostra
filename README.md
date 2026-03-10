@@ -7,7 +7,7 @@ For each new activity it:
 - downloads and saves the GPX file
 - renders a map image of the GPS track (OpenStreetMap tiles)
 - posts a Mastodon mention to the user with key stats and the map (public or unlisted, per-user configurable)
-- optionally pushes a CalDAV event to a Nextcloud calendar
+- optionally pushes a CalDAV event to e.g. Nextcloud calendar
 
 Messages and calendar entries are formatted in **German** with metric units.
 
@@ -21,7 +21,7 @@ Messages and calendar entries are formatted in **German** with metric units.
 | Mastodon post | Bot mentions the user; visibility is `public` or `unlisted` per user |
 | Activity stats | Duration, distance, pace/speed, elevation, power, heart rate |
 | Map image | GPX track rendered as PNG, attached to the DM |
-| CalDAV | Optional per-user; pushes VEVENT to a Nextcloud calendar |
+| CalDAV | Optional per-user; pushes VEVENT to an iCal compatible calendar |
 | SQLite | All Garmin data stored; queryable by user, type, time |
 | Token caching | Garmin OAuth tokens persisted per user — avoids repeated logins |
 | Retry | Failed integrations (CalDAV/Mastodon) are retried on the next run |
@@ -59,13 +59,15 @@ Attached: a 800×600 PNG map of the GPS track.
 ### 1. Clone and configure
 
 ```bash
-git clone <repo-url> garmin-nostra
+git clone https://github.com/vinzgreg/garmin_nostra.git
 cd garmin-nostra
 cp config.toml.example config.toml
-$EDITOR config.toml
+$EDITOR config.toml // editor like nano, vim...
 ```
 
 ### 2. Create the data directory
+
+I have this data directory as part of my home directory. Don't be confused, in the config-file it will refer to it as /data... not ~/data.
 
 ```bash
 mkdir -p ~/data/garminnostra
