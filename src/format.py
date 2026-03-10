@@ -131,10 +131,14 @@ def build_mastodon_message(handle: str, activity: dict[str, Any]) -> str:
     avg_hr      = activity.get("avg_hr")
     avg_power   = activity.get("avg_power_w")
 
+    # Extract display name from handle: "@vinz@social.hever.de" → "Vinz"
+    local_part = handle.lstrip("@").split("@")[0]
+    display_name = local_part.capitalize()
+
     lines: list[str] = []
 
     # Header
-    lines.append(f"{emoji} {name} – {fmt_date(dt)}, {fmt_time(dt)} Uhr")
+    lines.append(f"{display_name}, {emoji} {name} – {fmt_date(dt)}, {fmt_time(dt)} Uhr")
 
     # Primary stats
     primary: list[str] = []
@@ -161,6 +165,6 @@ def build_mastodon_message(handle: str, activity: dict[str, Any]) -> str:
         lines.append("  ".join(secondary))
 
     lines.append("")
-    lines.append(f"{hashtag} #GarminNostra {handle}")
+    lines.append(f"{hashtag} #GarminNoStra {handle}")
 
     return "\n".join(lines)
