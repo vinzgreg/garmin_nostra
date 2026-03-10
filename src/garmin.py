@@ -140,22 +140,23 @@ class GarminClient:
     def get_gpx(self, activity_id: int | str, timeout: int = 30) -> bytes:
         """Download GPX bytes for *activity_id* with a hard *timeout* in seconds.
 
-        Each call uses a fresh, isolated Garmin client so a hung thread from
-        a previous timeout cannot block subsequent downloads via shared state.
+        Both client creation (login/profile fetch) and the download run inside
+        the thread so the full operation is subject to the timeout.
         """
         import concurrent.futures
 
-        client = self._fresh_download_client()
+        def _download() -> bytes:
+            c = self._fresh_download_client()
+            return c.download_activity(
+                activity_id, dl_fmt=c.ActivityDownloadFormat.GPX
+            )
+
         ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-        future = ex.submit(
-            client.download_activity,
-            activity_id,
-            dl_fmt=client.ActivityDownloadFormat.GPX,
-        )
+        future = ex.submit(_download)
         try:
             result = future.result(timeout=timeout)
             ex.shutdown(wait=False)
             return result
         except concurrent.futures.TimeoutError:
-            ex.shutdown(wait=False)  # abandon the hanging thread, do not block
+            ex.shutdown(wait=False)
             raise TimeoutError(f"GPX download timed out after {timeout}s")
