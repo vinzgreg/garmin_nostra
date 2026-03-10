@@ -121,13 +121,16 @@ class GarminClient:
         import concurrent.futures
 
         client = self._client_()
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
-            future = ex.submit(
-                client.download_activity,
-                activity_id,
-                dl_fmt=client.ActivityDownloadFormat.GPX,
-            )
-            try:
-                return future.result(timeout=timeout)
-            except concurrent.futures.TimeoutError:
-                raise TimeoutError(f"GPX download timed out after {timeout}s")
+        ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        future = ex.submit(
+            client.download_activity,
+            activity_id,
+            dl_fmt=client.ActivityDownloadFormat.GPX,
+        )
+        try:
+            result = future.result(timeout=timeout)
+            ex.shutdown(wait=False)
+            return result
+        except concurrent.futures.TimeoutError:
+            ex.shutdown(wait=False)  # abandon the hanging thread, do not block
+            raise TimeoutError(f"GPX download timed out after {timeout}s")
