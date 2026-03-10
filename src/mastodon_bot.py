@@ -21,10 +21,11 @@ class MastodonBot:
     recipient's DM timeline, not on the public timeline.
     """
 
-    def __init__(self, api_base_url: str, access_token: str) -> None:
+    def __init__(self, api_base_url: str, access_token: str, request_timeout: int = 30) -> None:
         self._client = Mastodon(
             access_token=access_token,
             api_base_url=api_base_url,
+            request_timeout=request_timeout,
         )
         logger.info("Mastodon bot initialised (%s).", api_base_url)
 

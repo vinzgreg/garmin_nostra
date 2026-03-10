@@ -18,7 +18,7 @@ _START_COLOR = "#22c55e"   # green
 _END_COLOR   = "#ef4444"   # red
 
 
-def render_map(gpx_data: bytes, output_path: Path) -> Path | None:
+def render_map(gpx_data: bytes, output_path: Path, timeout: int = 30) -> Path | None:
     """
     Parse *gpx_data* and render the track to a PNG at *output_path*.
 
@@ -48,6 +48,7 @@ def render_map(gpx_data: bytes, output_path: Path) -> Path | None:
             padding_x=20,
             padding_y=20,
             url_template=_OSM_TILE_URL,
+            request_timeout=timeout,
         )
         m.add_line(Line(points, _TRACK_COLOR, 3))
         m.add_marker(CircleMarker(points[0],  _START_COLOR, 12))
