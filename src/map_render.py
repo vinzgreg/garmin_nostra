@@ -48,7 +48,7 @@ def render_map(gpx_data: bytes, output_path: Path, timeout: int = 30) -> Path | 
             padding_x=20,
             padding_y=20,
             url_template=_OSM_TILE_URL,
-            request_timeout=timeout,
+            tile_request_timeout=timeout,
         )
         m.add_line(Line(points, _TRACK_COLOR, 3))
         m.add_marker(CircleMarker(points[0],  _START_COLOR, 12))
