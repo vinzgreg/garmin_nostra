@@ -27,17 +27,30 @@ class GarminClient:
         username: str,
         password: str,
         tokenstore: str | Path | None = None,
+        timeout: int = 30,
     ) -> None:
         self._username   = username
         self._password   = password
         self._tokenstore = str(tokenstore) if tokenstore else None
+        self._timeout    = timeout
         self._client: Garmin | None = None
+
+    def _apply_timeout(self, client: Garmin) -> None:
+        """Set the garth request timeout on *client* if the API allows it."""
+        try:
+            client.garth.configure(timeout=self._timeout)
+        except Exception:
+            try:
+                client.garth.timeout = self._timeout
+            except Exception:
+                pass
 
     def connect(self) -> None:
         logger.info("Connecting to Garmin Connect for %s …", self._username)
         self._client = Garmin(self._username, self._password)
         try:
             self._client.login(self._tokenstore)
+            self._apply_timeout(self._client)
             logger.info("Authenticated (token store: %s).", self._tokenstore or "none")
         except GarminConnectAuthenticationError as exc:
             raise RuntimeError(
@@ -47,6 +60,7 @@ class GarminClient:
             logger.warning("Token login failed (%s) — retrying with credentials.", exc)
             self._client = Garmin(self._username, self._password)
             self._client.login()
+            self._apply_timeout(self._client)
             if self._tokenstore:
                 Path(self._tokenstore).mkdir(parents=True, exist_ok=True)
                 try:
@@ -111,16 +125,27 @@ class GarminClient:
         )
         return result
 
+    def _fresh_download_client(self) -> Garmin:
+        """Return a new Garmin instance loaded from the token cache.
+
+        Uses no network call when tokens are valid — just reads from disk.
+        A fresh client ensures a hung download thread cannot block the next
+        download via shared connection-pool state.
+        """
+        c = Garmin(self._username, self._password)
+        c.login(self._tokenstore)
+        self._apply_timeout(c)
+        return c
+
     def get_gpx(self, activity_id: int | str, timeout: int = 30) -> bytes:
         """Download GPX bytes for *activity_id* with a hard *timeout* in seconds.
 
-        Runs the download in a worker thread so the timeout is enforced even
-        when the underlying httpx/garth library ignores socket defaults.
-        The worker thread is daemon so it does not block process exit.
+        Each call uses a fresh, isolated Garmin client so a hung thread from
+        a previous timeout cannot block subsequent downloads via shared state.
         """
         import concurrent.futures
 
-        client = self._client_()
+        client = self._fresh_download_client()
         ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         future = ex.submit(
             client.download_activity,

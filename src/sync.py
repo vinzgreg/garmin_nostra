@@ -97,6 +97,7 @@ def process_user(
         username=user_cfg["garmin_username"],
         password=user_cfg["garmin_password"],
         tokenstore=store.token_dir / name,
+        timeout=request_timeout,
     )
 
     run_id = store.start_sync_run(user_id)
