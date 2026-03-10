@@ -60,30 +60,60 @@ class GarminClient:
             self.connect()
         return self._client  # type: ignore[return-value]
 
-    def get_activities_since(self, since: datetime) -> list[dict[str, Any]]:
-        """Return activities with a start time strictly after *since* (UTC-aware)."""
-        client = self._client_()
-        raw = client.get_activities(0, 100)
-        result = []
-        for act in raw:
-            start_str = act.get("startTimeGMT") or act.get("startTimeLocal", "")
-            try:
-                start = datetime.fromisoformat(
-                    start_str.replace(" ", "T")
-                ).replace(tzinfo=timezone.utc)
-            except (ValueError, AttributeError):
-                continue
-            if start > since:
-                result.append(act)
+    def get_activities_since(self, since: datetime, page_size: int = 100) -> list[dict[str, Any]]:
+        """Return all activities with a start time strictly after *since* (UTC-aware).
+
+        Paginates through the Garmin API until it reaches activities older than *since*
+        or an empty page.
+        """
+        client  = self._client_()
+        result  = []
+        start   = 0
+
+        while True:
+            page = client.get_activities(start, page_size)
+            if not page:
+                break
+
+            page_had_match = False
+            for act in page:
+                start_str = act.get("startTimeGMT") or act.get("startTimeLocal", "")
+                try:
+                    act_time = datetime.fromisoformat(
+                        start_str.replace(" ", "T")
+                    ).replace(tzinfo=timezone.utc)
+                except (ValueError, AttributeError):
+                    continue
+                if act_time > since:
+                    result.append(act)
+                    page_had_match = True
+
+            # If no activity on this page was newer than *since*, we're done
+            if not page_had_match:
+                break
+
+            start += page_size
+
         logger.info(
-            "Found %d new activities since %s for %s.",
+            "Found %d activities since %s for %s.",
             len(result), since.isoformat(), self._username,
         )
         return result
 
-    def get_gpx(self, activity_id: int | str) -> bytes:
-        """Download GPX bytes for *activity_id*."""
+    def get_gpx(self, activity_id: int | str, timeout: int = 30) -> bytes:
+        """Download GPX bytes for *activity_id* with a *timeout* in seconds."""
+        import signal
+
+        def _timeout_handler(signum, frame):
+            raise TimeoutError(f"GPX download timed out after {timeout}s")
+
         client = self._client_()
-        return client.download_activity(
-            activity_id, dl_fmt=client.ActivityDownloadFormat.GPX
-        )
+        old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
+        signal.alarm(timeout)
+        try:
+            return client.download_activity(
+                activity_id, dl_fmt=client.ActivityDownloadFormat.GPX
+            )
+        finally:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, old_handler)
