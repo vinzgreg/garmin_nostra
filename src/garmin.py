@@ -112,19 +112,12 @@ class GarminClient:
         return result
 
     def get_gpx(self, activity_id: int | str, timeout: int = 30) -> bytes:
-        """Download GPX bytes for *activity_id* with a *timeout* in seconds."""
-        import signal
+        """Download GPX bytes for *activity_id*.
 
-        def _timeout_handler(signum, frame):
-            raise TimeoutError(f"GPX download timed out after {timeout}s")
-
+        Relies on the process-wide socket.setdefaulttimeout() set in run().
+        The *timeout* parameter is kept for API compatibility but unused.
+        """
         client = self._client_()
-        old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
-        signal.alarm(timeout)
-        try:
-            return client.download_activity(
-                activity_id, dl_fmt=client.ActivityDownloadFormat.GPX
-            )
-        finally:
-            signal.alarm(0)
-            signal.signal(signal.SIGALRM, old_handler)
+        return client.download_activity(
+            activity_id, dl_fmt=client.ActivityDownloadFormat.GPX
+        )

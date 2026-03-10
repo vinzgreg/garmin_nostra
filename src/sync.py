@@ -5,6 +5,7 @@ from __future__ import annotations
 import fcntl
 import logging
 import os
+import socket
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -174,6 +175,11 @@ def process_user(
 def run(config_path: str) -> None:
     lock_fd = _acquire_lock()
     cfg = load_config(config_path)
+
+    # Apply a process-wide socket timeout so every HTTP call (Garmin, CalDAV,
+    # OSM tiles, Mastodon) is capped at the configured value.  This works at
+    # the OS level and is more reliable than SIGALRM with httpx/requests.
+    socket.setdefaulttimeout(cfg.get("sync", {}).get("request_timeout_s", 30))
 
     storage_cfg = cfg.get("storage", {})
     if log_file := storage_cfg.get("log_file"):
