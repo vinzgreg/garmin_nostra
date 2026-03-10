@@ -25,7 +25,7 @@ LOG_FORMAT = "%(asctime)s %(levelname)-8s %(name)s: %(message)s"
 LOG_DATEFMT = "%Y-%m-%dT%H:%M:%S"
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format=LOG_FORMAT,
     datefmt=LOG_DATEFMT,
 )
@@ -118,7 +118,9 @@ def process_user(
             logger.info("[%s] Activity %d/%d: %s", name, idx, found, garmin_id)
 
             # Check DB for this activity
+            logger.debug("[%s] DB lookup for %s", name, garmin_id)
             existing = store.get_activity(user_id, garmin_id)
+            logger.debug("[%s] DB lookup done: %s", name, "exists" if existing else "new")
 
             if existing is None:
                 # ── New activity — download, store, then integrate ──────────
@@ -138,10 +140,12 @@ def process_user(
                     and act_time is not None
                     and act_time < datetime.now(timezone.utc) - timedelta(days=gpx_max_age_days)
                 )
+                logger.debug("[%s] skip_gpx=%s act_time=%s", name, skip_gpx, act_time)
 
                 if skip_gpx:
                     logger.debug("[%s] Skipping GPX for old activity %s.", name, garmin_id)
                 else:
+                    logger.debug("[%s] Downloading GPX for %s", name, garmin_id)
                     try:
                         gpx_data = garmin.get_gpx(garmin_id, timeout=request_timeout)
                         gpx_path = store.save_gpx(name, garmin_id, gpx_data)
@@ -153,6 +157,7 @@ def process_user(
                     map_path = store.map_path(name, garmin_id)
                     map_path = render_map(gpx_data, map_path, timeout=request_timeout)
 
+                logger.debug("[%s] Saving activity %s to DB", name, garmin_id)
                 activity_row = store.save_activity(user_id, act, gpx_path)
                 logger.info("[%s] Neue Aktivität gespeichert: %s", name, garmin_id)
             else:
@@ -167,6 +172,7 @@ def process_user(
 
             # ── CalDAV (optional) ──────────────────────────────────────────
             if caldav_enabled and caldav_pusher and not activity_row.get("caldav_pushed"):
+                logger.debug("[%s] Pushing CalDAV for %s", name, garmin_id)
                 try:
                     caldav_pusher.push(activity_row)
                     store.mark_caldav_pushed(user_id, garmin_id)
@@ -176,12 +182,14 @@ def process_user(
 
             # ── Mastodon DM ────────────────────────────────────────────────
             if handle and not activity_row.get("mastodon_posted"):
+                logger.debug("[%s] Posting Mastodon for %s", name, garmin_id)
                 try:
                     bot.post_activity(handle, activity_row, map_path,
                                       public=user_cfg.get("mastodon_public", False))
                     store.mark_mastodon_posted(user_id, garmin_id)
                 except Exception as exc:
                     logger.error("[%s] Mastodon fehlgeschlagen für %s: %s", name, garmin_id, exc)
+            logger.debug("[%s] Activity %s done", name, garmin_id)
 
             processed += 1
 
