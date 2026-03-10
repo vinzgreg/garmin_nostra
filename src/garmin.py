@@ -112,12 +112,22 @@ class GarminClient:
         return result
 
     def get_gpx(self, activity_id: int | str, timeout: int = 30) -> bytes:
-        """Download GPX bytes for *activity_id*.
+        """Download GPX bytes for *activity_id* with a hard *timeout* in seconds.
 
-        Relies on the process-wide socket.setdefaulttimeout() set in run().
-        The *timeout* parameter is kept for API compatibility but unused.
+        Runs the download in a worker thread so the timeout is enforced even
+        when the underlying httpx/garth library ignores socket defaults.
+        The worker thread is daemon so it does not block process exit.
         """
+        import concurrent.futures
+
         client = self._client_()
-        return client.download_activity(
-            activity_id, dl_fmt=client.ActivityDownloadFormat.GPX
-        )
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+            future = ex.submit(
+                client.download_activity,
+                activity_id,
+                dl_fmt=client.ActivityDownloadFormat.GPX,
+            )
+            try:
+                return future.result(timeout=timeout)
+            except concurrent.futures.TimeoutError:
+                raise TimeoutError(f"GPX download timed out after {timeout}s")

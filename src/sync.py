@@ -111,8 +111,9 @@ def process_user(
             key=lambda a: a.get("startTimeGMT") or a.get("startTimeLocal") or ""
         )
 
-        for act in activities:
+        for idx, act in enumerate(activities, 1):
             garmin_id = str(act["activityId"])
+            logger.info("[%s] Activity %d/%d: %s", name, idx, found, garmin_id)
 
             # Check DB for this activity
             existing = store.get_activity(user_id, garmin_id)
