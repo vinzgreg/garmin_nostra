@@ -90,11 +90,14 @@ On first start the container runs an immediate sync, then schedules a cron job a
 ### Logs
 
 ```bash
-# Container output (startup messages, cron daemon)
+# All output (startup, cron runs, sync script) goes to Docker's log
 docker logs garmin-nostra -f
+```
 
-# Sync script output (all cron runs + initial sync)
-docker exec garmin-nostra tail -f /var/log/garmin-nostra.log
+To also persist logs to a file, add `log_file = "/data/garmin_nostra.log"` to the `[storage]` section of `config.toml`, then tail it:
+
+```bash
+docker exec garmin-nostra tail -f /data/garmin_nostra.log
 ```
 
 ### Manual sync
@@ -180,6 +183,7 @@ Create the bot account on your preferred instance, go to **Preferences → Devel
 | `gpx_max_age_days` | *(unset)* | Skip GPX download for activities older than N days; omit to always download |
 | `fit_max_age_days` | *(unset)* | Skip FIT download for activities older than N days; omit to always download |
 | `mastodon_max_age_days` | *(unset)* | Skip Mastodon posts for activities older than N days (avoids rate limits on backfill) |
+| `mastodon_post_delay_s` | `2.0` | Seconds to wait between consecutive Mastodon posts (avoids rate limits) |
 | `request_timeout_s` | `30` | Timeout in seconds for all external HTTP calls |
 
 ### `[storage]`
@@ -191,6 +195,8 @@ Create the bot account on your preferred instance, go to **Preferences → Devel
 | `fit_dir` | `/data/fit` | FIT files |
 | `map_dir` | `/data/maps` | Map images |
 | `token_dir` | `/data/tokens` | Garmin OAuth tokens (one subdirectory per user `name`) |
+| `log_level` | `info` | Log verbosity: `debug`, `info`, or `error` |
+| `log_file` | `/data/garmin_nostra.log` | *(optional)* Write logs to this file in addition to stdout |
 
 > **Critical:** All paths must start with `/data/`. The container's only access to the host filesystem is through the volume mount `~/data/garminnostra → /data`. Do **not** use `~`, `~/data/...`, `/home/vinz/...`, or any other host path — those paths do not exist inside the container and the token/file lookup will silently fail.
 >

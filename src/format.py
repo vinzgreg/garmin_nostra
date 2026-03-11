@@ -119,7 +119,7 @@ def build_mastodon_message(handle: str, activity: dict[str, Any]) -> str:
     name = activity.get("activity_name") or label
 
     # Parse start time
-    start_str = activity.get("start_time_utc") or activity.get("start_time_local", "")
+    start_str = activity.get("start_time_local") or activity.get("start_time_utc", "")
     try:
         dt = datetime.fromisoformat(start_str.replace(" ", "T"))
     except (ValueError, AttributeError):
