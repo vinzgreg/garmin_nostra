@@ -1,4 +1,4 @@
-"""Garmin Connect client — fetches activities and GPX data."""
+"""Garmin Connect client — fetches activities, GPX and FIT data."""
 
 from __future__ import annotations
 
@@ -160,3 +160,34 @@ class GarminClient:
         except concurrent.futures.TimeoutError:
             ex.shutdown(wait=False)
             raise TimeoutError(f"GPX download timed out after {timeout}s")
+
+    def get_fit(self, activity_id: int | str, timeout: int = 30) -> bytes:
+        """Download original FIT bytes for *activity_id* with a hard *timeout* in seconds.
+
+        The Garmin API returns a zip archive containing the .fit file; this
+        method returns the raw .fit bytes extracted from that archive.
+        """
+        import concurrent.futures
+        import io
+        import zipfile
+
+        def _download() -> bytes:
+            c = self._fresh_download_client()
+            zip_bytes = c.download_activity(
+                activity_id, dl_fmt=c.ActivityDownloadFormat.ORIGINAL
+            )
+            with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+                fit_names = [n for n in zf.namelist() if n.lower().endswith(".fit")]
+                if not fit_names:
+                    raise ValueError("No .fit file found in downloaded archive")
+                return zf.read(fit_names[0])
+
+        ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        future = ex.submit(_download)
+        try:
+            result = future.result(timeout=timeout)
+            ex.shutdown(wait=False)
+            return result
+        except concurrent.futures.TimeoutError:
+            ex.shutdown(wait=False)
+            raise TimeoutError(f"FIT download timed out after {timeout}s")

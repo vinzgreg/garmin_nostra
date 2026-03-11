@@ -88,6 +88,8 @@ CREATE TABLE IF NOT EXISTS activities (
 
     -- sync state
     gpx_path                TEXT,
+    fit_path                TEXT,
+    source                  TEXT,
     caldav_pushed           INTEGER NOT NULL DEFAULT 0,
     mastodon_posted         INTEGER NOT NULL DEFAULT 0,
     synced_at               TEXT    NOT NULL,
@@ -181,6 +183,8 @@ def _map_activity(user_id: int, act: dict) -> dict:
         "start_lon":               act.get("startLongitude"),
         "raw_json":                json.dumps(act, ensure_ascii=False),
         "gpx_path":                None,
+        "fit_path":                None,
+        "source":                  "GarminNoStra",
         "caldav_pushed":           0,
         "mastodon_posted":         0,
         "synced_at":               datetime.now(timezone.utc).isoformat(),
@@ -188,18 +192,30 @@ def _map_activity(user_id: int, act: dict) -> dict:
 
 
 class ActivityStore:
-    def __init__(self, db_path: str, gpx_dir: str, map_dir: str, token_dir: str) -> None:
+    def __init__(self, db_path: str, gpx_dir: str, map_dir: str, token_dir: str, fit_dir: str = "/data/fit") -> None:
         self.gpx_dir   = Path(gpx_dir)
+        self.fit_dir   = Path(fit_dir)
         self.map_dir   = Path(map_dir)
         self.token_dir = Path(token_dir)
-        for d in (self.gpx_dir, self.map_dir, self.token_dir):
+        for d in (self.gpx_dir, self.fit_dir, self.map_dir, self.token_dir):
             d.mkdir(parents=True, exist_ok=True)
 
         self._conn = sqlite3.connect(db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(_DDL)
+        self._migrate()
         self._conn.commit()
         logger.info("Storage ready. DB: %s", db_path)
+
+    def _migrate(self) -> None:
+        """Apply incremental schema changes to existing databases."""
+        for col, definition in [("fit_path", "TEXT"), ("source", "TEXT")]:
+            try:
+                self._conn.execute(f"ALTER TABLE activities ADD COLUMN {col} {definition}")
+                self._conn.commit()
+                logger.info("Migration: added %s column to activities.", col)
+            except sqlite3.OperationalError:
+                pass  # Column already exists
 
     # ── Users ────────────────────────────────────────────────────────────────
 
@@ -239,7 +255,7 @@ class ActivityStore:
         return dict(row) if row else None
 
     def save_activity(
-        self, user_id: int, raw_activity: dict, gpx_path: Path | None = None
+        self, user_id: int, raw_activity: dict, gpx_path: Path | None = None, fit_path: Path | None = None
     ) -> dict:
         """
         Insert activity into DB (ignore if already exists).
@@ -248,6 +264,8 @@ class ActivityStore:
         row = _map_activity(user_id, raw_activity)
         if gpx_path:
             row["gpx_path"] = str(gpx_path)
+        if fit_path:
+            row["fit_path"] = str(fit_path)
 
         cols   = ", ".join(row.keys())
         placeholders = ", ".join(f":{k}" for k in row.keys())
@@ -295,6 +313,13 @@ class ActivityStore:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(gpx_data)
         logger.info("GPX saved: %s", path)
+        return path
+
+    def save_fit(self, user_name: str, activity_id: str, fit_data: bytes) -> Path:
+        path = self.fit_dir / user_name / f"{activity_id}.fit"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(fit_data)
+        logger.info("FIT saved: %s", path)
         return path
 
     def map_path(self, user_name: str, activity_id: str) -> Path:

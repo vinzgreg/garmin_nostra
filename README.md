@@ -21,6 +21,7 @@ Messages and calendar entries are formatted in **German** with metric units.
 | Mastodon post | Bot mentions the user; visibility is `public` or `unlisted` per user |
 | Activity stats | Duration, distance, pace/speed, elevation, power, heart rate |
 | Map image | GPX track rendered as PNG, attached to the DM |
+| GPX + FIT files | Original GPX and FIT files downloaded and stored per activity |
 | CalDAV | Optional per-user; pushes VEVENT to an iCal compatible calendar |
 | SQLite | All Garmin data stored; queryable by user, type, time |
 | Token caching | Garmin OAuth tokens persisted per user — avoids repeated logins |
@@ -176,6 +177,10 @@ Create the bot account on your preferred instance, go to **Preferences → Devel
 |---|---|---|
 | `interval_minutes` | `60` | How often the cron job runs |
 | `lookback_days` | `30` | How far back to look on first run per user |
+| `gpx_max_age_days` | *(unset)* | Skip GPX download for activities older than N days; omit to always download |
+| `fit_max_age_days` | *(unset)* | Skip FIT download for activities older than N days; omit to always download |
+| `mastodon_max_age_days` | *(unset)* | Skip Mastodon posts for activities older than N days (avoids rate limits on backfill) |
+| `request_timeout_s` | `30` | Timeout in seconds for all external HTTP calls |
 
 ### `[storage]`
 
@@ -183,6 +188,7 @@ Create the bot account on your preferred instance, go to **Preferences → Devel
 |---|---|---|
 | `db_path` | `/data/garmin_nostra.db` | SQLite database |
 | `gpx_dir` | `/data/gpx` | GPX files |
+| `fit_dir` | `/data/fit` | FIT files |
 | `map_dir` | `/data/maps` | Map images |
 | `token_dir` | `/data/tokens` | Garmin OAuth tokens (one subdirectory per user `name`) |
 
@@ -193,6 +199,7 @@ Create the bot account on your preferred instance, go to **Preferences → Devel
 > |---|---|
 > | `/data/garmin_nostra.db` | `~/data/garminnostra/garmin_nostra.db` |
 > | `/data/gpx/` | `~/data/garminnostra/gpx/` |
+> | `/data/fit/` | `~/data/garminnostra/fit/` |
 > | `/data/maps/` | `~/data/garminnostra/maps/` |
 > | `/data/tokens/<name>/` | `~/data/garminnostra/tokens/<name>/` |
 
@@ -232,6 +239,11 @@ One block per Garmin Connect account:
 │   │   └── 12345678.gpx
 │   └── bob/
 │       └── 87654321.gpx
+├── fit/
+│   ├── alice/
+│   │   └── 12345678.fit
+│   └── bob/
+│       └── 87654321.fit
 ├── maps/
 │   ├── alice/
 │   │   └── 12345678.png
@@ -279,6 +291,8 @@ One row per activity per user. Key columns:
 | `calories` | INTEGER | |
 | `raw_json` | TEXT | Full Garmin API payload |
 | `gpx_path` | TEXT | Path to saved GPX file |
+| `fit_path` | TEXT | Path to saved FIT file |
+| `source` | TEXT | Origin of the record (always `GarminNoStra`) |
 | `caldav_pushed` | INTEGER | 0/1 |
 | `mastodon_posted` | INTEGER | 0/1 |
 

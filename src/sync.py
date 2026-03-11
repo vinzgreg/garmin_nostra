@@ -92,6 +92,7 @@ def process_user(
     lookback_days: int,
     request_timeout: int = 30,
     gpx_max_age_days: int | None = None,
+    fit_max_age_days: int | None = None,
     mastodon_max_age_days: int | None = None,
     mastodon_post_delay_s: float = 2.0,
 ) -> None:
@@ -147,6 +148,7 @@ def process_user(
                 # ── New activity — download, store, then integrate ──────────
                 gpx_data = None
                 gpx_path = None
+                fit_path = None
 
                 skip_gpx = (
                     gpx_max_age_days is not None
@@ -165,13 +167,30 @@ def process_user(
                     except Exception as exc:
                         logger.warning("[%s] GPX download failed for %s: %s", name, garmin_id, exc)
 
+                skip_fit = (
+                    fit_max_age_days is not None
+                    and act_time is not None
+                    and act_time < datetime.now(timezone.utc) - timedelta(days=fit_max_age_days)
+                )
+                logger.debug("[%s] skip_fit=%s act_time=%s", name, skip_fit, act_time)
+
+                if skip_fit:
+                    logger.debug("[%s] Skipping FIT for old activity %s.", name, garmin_id)
+                else:
+                    logger.debug("[%s] Downloading FIT for %s", name, garmin_id)
+                    try:
+                        fit_data = garmin.get_fit(garmin_id, timeout=request_timeout)
+                        fit_path = store.save_fit(name, garmin_id, fit_data)
+                    except Exception as exc:
+                        logger.warning("[%s] FIT download failed for %s: %s", name, garmin_id, exc)
+
                 map_path = None
                 if gpx_data:
                     map_path = store.map_path(name, garmin_id)
                     map_path = render_map(gpx_data, map_path, timeout=request_timeout)
 
                 logger.debug("[%s] Saving activity %s to DB", name, garmin_id)
-                activity_row = store.save_activity(user_id, act, gpx_path)
+                activity_row = store.save_activity(user_id, act, gpx_path, fit_path)
                 logger.info("[%s] Neue Aktivität gespeichert: %s", name, garmin_id)
             else:
                 # ── Known activity — check if any integration needs retry ───
@@ -239,6 +258,7 @@ def run(config_path: str) -> None:
     store = ActivityStore(
         db_path=storage_cfg.get("db_path",   "/data/garmin_nostra.db"),
         gpx_dir=storage_cfg.get("gpx_dir",   "/data/gpx"),
+        fit_dir=storage_cfg.get("fit_dir",   "/data/fit"),
         map_dir=storage_cfg.get("map_dir",   "/data/maps"),
         token_dir=storage_cfg.get("token_dir", "/data/tokens"),
     )
@@ -247,6 +267,7 @@ def run(config_path: str) -> None:
     lookback_days   = sync_cfg.get("lookback_days", 30)
     request_timeout = sync_cfg.get("request_timeout_s", 30)
     gpx_max_age_days        = sync_cfg.get("gpx_max_age_days", None)
+    fit_max_age_days        = sync_cfg.get("fit_max_age_days", None)
     mastodon_max_age_days   = sync_cfg.get("mastodon_max_age_days", None)
     mastodon_post_delay_s   = float(sync_cfg.get("mastodon_post_delay_s", 2.0))
 
@@ -265,7 +286,7 @@ def run(config_path: str) -> None:
 
     for user_cfg in users:
         try:
-            process_user(user_cfg, store, bot, caldav_pusher, lookback_days, request_timeout, gpx_max_age_days, mastodon_max_age_days, mastodon_post_delay_s)
+            process_user(user_cfg, store, bot, caldav_pusher, lookback_days, request_timeout, gpx_max_age_days, fit_max_age_days, mastodon_max_age_days, mastodon_post_delay_s)
         except Exception as exc:
             logger.error("Unbehandelter Fehler bei Benutzer %s: %s", user_cfg.get("name"), exc)
 
