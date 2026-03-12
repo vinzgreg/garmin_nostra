@@ -6,6 +6,7 @@ import logging
 from pathlib import Path
 
 import gpxpy
+from PIL import ImageDraw, ImageFont
 from staticmap import CircleMarker, Line, StaticMap
 
 logger = logging.getLogger(__name__)
@@ -16,6 +17,22 @@ _MAP_HEIGHT = 600
 _TRACK_COLOR = "#3b82f6"   # blue
 _START_COLOR = "#22c55e"   # green
 _END_COLOR   = "#ef4444"   # red
+
+
+def _add_osm_attribution(image) -> None:
+    """Stamp a tiny OSM attribution notice in the bottom-right corner."""
+    text = "© OpenStreetMap contributors"
+    draw = ImageDraw.Draw(image)
+    try:
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 10)
+    except OSError:
+        font = ImageFont.load_default()
+    bbox = draw.textbbox((0, 0), text, font=font)
+    w, h = bbox[2] - bbox[0], bbox[3] - bbox[1]
+    x = image.width - w - 4
+    y = image.height - h - 4
+    draw.rectangle((x - 2, y - 1, x + w + 2, y + h + 2), fill=(255, 255, 255, 180))
+    draw.text((x, y), text, font=font, fill=(80, 80, 80))
 
 
 def render_map(gpx_data: bytes, output_path: Path, timeout: int = 30) -> Path | None:
@@ -55,6 +72,7 @@ def render_map(gpx_data: bytes, output_path: Path, timeout: int = 30) -> Path | 
         m.add_marker(CircleMarker(points[-1], _END_COLOR,   12))
 
         image = m.render()
+        _add_osm_attribution(image)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         image.save(str(output_path), "PNG")
         logger.info("Karte gespeichert: %s", output_path)
