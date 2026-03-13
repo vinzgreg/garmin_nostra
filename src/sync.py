@@ -20,6 +20,7 @@ from garmin import GarminClient
 from storage import ActivityStore
 from caldav_push import CalDAVPusher
 from mastodon_bot import MastodonBot
+from kudos_machine import KudosMachine
 from map_render import render_map
 
 LOG_FORMAT = "%(asctime)s %(levelname)-8s %(name)s: %(message)s"
@@ -95,6 +96,7 @@ def process_user(
     fit_max_age_days: int | None = None,
     mastodon_max_age_days: int | None = None,
     mastodon_post_delay_s: float = 2.0,
+    kudos_machine: KudosMachine | None = None,
 ) -> None:
     name   = user_cfg["name"]
     handle = user_cfg.get("mastodon_handle")
@@ -221,9 +223,9 @@ def process_user(
             if handle and not activity_row.get("mastodon_posted") and not skip_mastodon:
                 logger.debug("[%s] Posting Mastodon for %s", name, garmin_id)
                 try:
-                    bot.post_activity(handle, activity_row, map_path,
-                                      public=user_cfg.get("mastodon_public", False))
-                    store.mark_mastodon_posted(user_id, garmin_id)
+                    status_id = bot.post_activity(handle, activity_row, map_path,
+                                                  public=user_cfg.get("mastodon_public", False))
+                    store.mark_mastodon_posted(user_id, garmin_id, status_id=status_id)
                     if mastodon_post_delay_s > 0:
                         time.sleep(mastodon_post_delay_s)
                 except Exception as exc:
@@ -238,6 +240,17 @@ def process_user(
     except Exception as exc:
         store.finish_sync_run(run_id, found, processed, "failed", str(exc))
         logger.error("[%s] Sync fehlgeschlagen: %s", name, exc, exc_info=True)
+
+    # ── KudosMachine — runs after every invocation, even if Garmin sync failed ─
+    if kudos_machine is not None and handle and not user_cfg.get("suppressKudos", False):
+        logger.debug("[%s] Running KudosMachine.", name)
+        try:
+            kudos_machine.process_user(
+                user_id, handle, store, max_age_days=mastodon_max_age_days,
+                public=user_cfg.get("mastodon_public", False),
+            )
+        except Exception as exc:
+            logger.error("[%s] KudosMachine fehlgeschlagen: %s", name, exc)
 
 
 def run(config_path: str) -> None:
@@ -278,6 +291,12 @@ def run(config_path: str) -> None:
         request_timeout=request_timeout,
     )
 
+    kudos_machine = KudosMachine(
+        bot=bot,
+        custom_template=bot_cfg.get("kudosCustom") or None,
+        post_delay_s=mastodon_post_delay_s,
+    )
+
     caldav_pusher = _build_caldav_pusher(cfg, timeout=request_timeout)
 
     users = cfg.get("users", [])
@@ -286,7 +305,7 @@ def run(config_path: str) -> None:
 
     for user_cfg in users:
         try:
-            process_user(user_cfg, store, bot, caldav_pusher, lookback_days, request_timeout, gpx_max_age_days, fit_max_age_days, mastodon_max_age_days, mastodon_post_delay_s)
+            process_user(user_cfg, store, bot, caldav_pusher, lookback_days, request_timeout, gpx_max_age_days, fit_max_age_days, mastodon_max_age_days, mastodon_post_delay_s, kudos_machine)
         except Exception as exc:
             logger.error("Unbehandelter Fehler bei Benutzer %s: %s", user_cfg.get("name"), exc)
 

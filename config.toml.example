@@ -7,6 +7,14 @@
 mastodon_api_base_url = "https://mastodon.social"
 mastodon_access_token  = "your_bot_access_token"
 
+# KudosMachine — reply with kudos when someone favourites an activity post.
+# Enabled by default for all users. Suppress per-user with suppressKudos = true.
+#
+# Optionally override the message template. Supports {fav_giver} and
+# {activity_user} placeholders (both are @handle@instance strings).
+# If omitted, a random message from the built-in pool of 100 is used.
+# kudosCustom = ":kudos: {fav_giver} {activity_user} — Einfach fantastisch!"
+
 # ── Sync behaviour ──────────────────────────────────────────────────────────
 [sync]
 # How often the cron job runs (minutes)
@@ -39,6 +47,7 @@ garmin_username  = "alice@example.com"
 garmin_password  = "garmin_password_alice"
 mastodon_handle  = "@alice@fosstodon.org"
 caldav_enabled   = true
+# suppressKudos  = true   # uncomment to opt out of kudos replies
 
 [[users]]
 name             = "bob"
@@ -46,3 +55,4 @@ garmin_username  = "bob@example.com"
 garmin_password  = "garmin_password_bob"
 mastodon_handle  = "@bob@mastodon.social"
 caldav_enabled   = false
+# suppressKudos  = true   # uncomment to opt out of kudos replies
