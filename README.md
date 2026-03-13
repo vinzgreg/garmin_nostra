@@ -22,6 +22,7 @@ Messages and calendar entries are formatted in **German** with metric units.
 | Activity stats | Duration, distance, pace/speed, elevation, power, heart rate |
 | Map image | GPX track rendered as PNG, attached to the DM |
 | GPX + FIT files | Original GPX and FIT files downloaded and stored per activity |
+| KudosMachine | Polls activity posts for favourites and auto-replies with a kudos message mentioning the fav-giver; 100 random German messages or a custom template |
 | CalDAV | Optional per-user; pushes VEVENT to an iCal compatible calendar |
 | SQLite | All Garmin data stored; queryable by user, type, time |
 | Token caching | Garmin OAuth tokens persisted per user — avoids repeated logins |
@@ -171,8 +172,15 @@ All settings live in `config.toml` (git-ignored). See `config.toml.example` for 
 |---|---|
 | `mastodon_api_base_url` | Base URL of the Mastodon instance the bot account lives on |
 | `mastodon_access_token` | OAuth access token for the bot account |
+| `kudosCustom` | *(optional)* Custom kudos reply template. Supports `{fav_giver}` and `{activity_user}` placeholders. If omitted, a random message from the built-in pool of 100 is used. |
 
-Create the bot account on your preferred instance, go to **Preferences → Development → New application**, grant `write:statuses write:media` scopes, and copy the access token.
+Create the bot account on your preferred instance, go to **Preferences → Development → New application**, grant the following scopes, and copy the access token:
+
+| Scope | Purpose |
+|---|---|
+| `read:statuses` | Fetch who favourited an activity post (KudosMachine) |
+| `write:statuses` | Post activity summaries and kudos replies |
+| `write:media` | Upload map images |
 
 ### `[sync]`
 
@@ -232,6 +240,7 @@ One block per Garmin Connect account:
 | `mastodon_handle` | — | `@user@instance` — the bot will mention this handle |
 | `mastodon_public` | `false` | `true` = public post, `false` = unlisted (boostable but not on public timeline) |
 | `caldav_enabled` | `false` | Set `true` to push CalDAV events for this user |
+| `suppressKudos` | `false` | Set `true` to opt this user out of kudos replies |
 
 ---
 
@@ -304,6 +313,15 @@ One row per activity per user. Key columns:
 
 Full column list: see `src/storage.py`.
 
+### `kudos_sent`
+Deduplication log for KudosMachine — one row per (status, fav-giver) pair.
+
+| Column | Type | Description |
+|---|---|---|
+| `status_id` | TEXT PK | Mastodon status ID of the activity post |
+| `account_id` | TEXT PK | Mastodon account ID of the fav-giver |
+| `sent_at` | TEXT | ISO-8601 UTC timestamp |
+
 ### `sync_runs`
 Audit log — one row per sync attempt per user.
 
@@ -350,10 +368,11 @@ ORDER BY a.start_time_utc;
 |---|---|
 | `src/sync.py` | Main entry point; iterates users, orchestrates pipeline |
 | `src/garmin.py` | Garmin Connect client with per-user token caching |
-| `src/storage.py` | SQLite store — users, activities, sync audit log |
+| `src/storage.py` | SQLite store — users, activities, kudos deduplication, sync audit log |
 | `src/format.py` | German formatting: dates, numbers, pace, message builder |
 | `src/map_render.py` | GPX → PNG via `staticmap` (OSM tiles) |
 | `src/mastodon_bot.py` | Bot that posts mentions with optional map attachment (public or unlisted) |
+| `src/kudos_machine.py` | Polls activity posts for new favourites and sends kudos replies |
 | `src/caldav_push.py` | Builds VEVENT and pushes to Nextcloud CalDAV |
 
 ---
@@ -361,7 +380,7 @@ ORDER BY a.start_time_utc;
 ## Requirements
 
 - Docker & Docker Compose
-- A Mastodon bot account with `write:statuses write:media` scope
+- A Mastodon bot account with `read:statuses write:statuses write:media` scopes
 - Garmin Connect credentials per user
 - *(optional)* A Nextcloud CalDAV calendar
 

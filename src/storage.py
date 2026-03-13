@@ -92,9 +92,17 @@ CREATE TABLE IF NOT EXISTS activities (
     source                  TEXT,
     caldav_pushed           INTEGER NOT NULL DEFAULT 0,
     mastodon_posted         INTEGER NOT NULL DEFAULT 0,
+    mastodon_status_id      TEXT,
     synced_at               TEXT    NOT NULL,
 
     UNIQUE(user_id, garmin_activity_id)
+);
+
+CREATE TABLE IF NOT EXISTS kudos_sent (
+    status_id   TEXT NOT NULL,
+    account_id  TEXT NOT NULL,
+    sent_at     TEXT NOT NULL,
+    PRIMARY KEY (status_id, account_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_act_user      ON activities(user_id);
@@ -209,7 +217,11 @@ class ActivityStore:
 
     def _migrate(self) -> None:
         """Apply incremental schema changes to existing databases."""
-        for col, definition in [("fit_path", "TEXT"), ("source", "TEXT")]:
+        for col, definition in [
+            ("fit_path", "TEXT"),
+            ("source", "TEXT"),
+            ("mastodon_status_id", "TEXT"),
+        ]:
             try:
                 self._conn.execute(f"ALTER TABLE activities ADD COLUMN {col} {definition}")
                 self._conn.commit()
@@ -283,10 +295,65 @@ class ActivityStore:
         )
         self._conn.commit()
 
-    def mark_mastodon_posted(self, user_id: int, garmin_activity_id: str) -> None:
+    def mark_mastodon_posted(
+        self, user_id: int, garmin_activity_id: str, status_id: str | None = None
+    ) -> None:
         self._conn.execute(
-            "UPDATE activities SET mastodon_posted = 1 WHERE user_id = ? AND garmin_activity_id = ?",
-            (user_id, garmin_activity_id),
+            """
+            UPDATE activities
+               SET mastodon_posted = 1, mastodon_status_id = COALESCE(?, mastodon_status_id)
+             WHERE user_id = ? AND garmin_activity_id = ?
+            """,
+            (status_id, user_id, garmin_activity_id),
+        )
+        self._conn.commit()
+
+    # ── Kudos tracking ───────────────────────────────────────────────────────
+
+    def get_activities_for_kudos(
+        self, user_id: int, max_age_days: int | None = None
+    ) -> list[dict]:
+        """Return posted activities that have a mastodon_status_id, optionally age-limited."""
+        query = (
+            "SELECT garmin_activity_id, mastodon_status_id, start_time_utc"
+            " FROM activities"
+            " WHERE user_id = ? AND mastodon_posted = 1 AND mastodon_status_id IS NOT NULL"
+        )
+        params: list = [user_id]
+        if max_age_days is not None:
+            from datetime import timedelta
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=max_age_days)).isoformat()
+            query += " AND start_time_utc >= ?"
+            params.append(cutoff)
+        rows = self._conn.execute(query, params).fetchall()
+        if not rows:
+            # Help diagnose why: how many are posted but lack a status_id?
+            total_posted = self._conn.execute(
+                "SELECT COUNT(*) FROM activities WHERE user_id = ? AND mastodon_posted = 1",
+                (user_id,),
+            ).fetchone()[0]
+            missing_id = self._conn.execute(
+                "SELECT COUNT(*) FROM activities WHERE user_id = ? AND mastodon_posted = 1 AND mastodon_status_id IS NULL",
+                (user_id,),
+            ).fetchone()[0]
+            logger.debug(
+                "get_activities_for_kudos: 0 eligible for user_id=%d "
+                "(total mastodon_posted=%d, missing status_id=%d).",
+                user_id, total_posted, missing_id,
+            )
+        return [dict(r) for r in rows]
+
+    def is_kudos_sent(self, status_id: str, account_id: str) -> bool:
+        row = self._conn.execute(
+            "SELECT 1 FROM kudos_sent WHERE status_id = ? AND account_id = ?",
+            (status_id, account_id),
+        ).fetchone()
+        return row is not None
+
+    def mark_kudos_sent(self, status_id: str, account_id: str) -> None:
+        self._conn.execute(
+            "INSERT OR IGNORE INTO kudos_sent (status_id, account_id, sent_at) VALUES (?, ?, ?)",
+            (status_id, account_id, datetime.now(timezone.utc).isoformat()),
         )
         self._conn.commit()
 

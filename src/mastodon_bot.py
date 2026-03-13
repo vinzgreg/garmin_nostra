@@ -36,11 +36,12 @@ class MastodonBot:
         activity: dict[str, Any],
         map_image_path: Path | None = None,
         public: bool = False,
-    ) -> None:
+    ) -> str | None:
         """
         Send a mention to *mastodon_handle* with the activity summary.
         Attaches a map image if *map_image_path* exists.
         Use *public=True* for a public post, otherwise posts as unlisted.
+        Returns the Mastodon status ID of the posted status, or None on failure.
         """
         text = build_mastodon_message(mastodon_handle, activity)
         logger.debug("Mastodon message:\n%s", text)
@@ -59,15 +60,28 @@ class MastodonBot:
             except Exception as exc:
                 logger.warning("Kartenbild-Upload fehlgeschlagen: %s", exc)
 
-        self._client.status_post(
+        response = self._client.status_post(
             text,
             media_ids=media_ids or None,
             visibility="public" if public else "unlisted",
         )
         logger.info(
-            "Mastodon-DM gesendet an %s für Aktivität %s.",
+            "Mastodon-Post gesendet an %s für Aktivität %s.",
             mastodon_handle,
             activity.get("garmin_activity_id"),
+        )
+        return str(response["id"]) if response and response.get("id") else None
+
+    def get_favourited_by(self, status_id: str) -> list[dict]:
+        """Return list of accounts that have favourited *status_id*."""
+        return self._client.status_favourited_by(status_id) or []
+
+    def post_reply(self, text: str, in_reply_to_id: str, public: bool = False) -> None:
+        """Post a reply to *in_reply_to_id*."""
+        self._client.status_post(
+            text,
+            in_reply_to_id=in_reply_to_id,
+            visibility="public" if public else "unlisted",
         )
 
 
