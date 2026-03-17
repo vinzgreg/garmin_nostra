@@ -130,6 +130,7 @@ def build_mastodon_message(handle: str, activity: dict[str, Any]) -> str:
     elev_m      = float(activity.get("elevation_gain_m") or 0)
     avg_hr      = activity.get("avg_hr")
     avg_power   = activity.get("avg_power_w")
+    max_power   = activity.get("max_power_w")
 
     # Extract display name from handle: "@vinz@social.hever.de" → "Vinz"
     local_part = handle.lstrip("@").split("@")[0]
@@ -157,7 +158,12 @@ def build_mastodon_message(handle: str, activity: dict[str, Any]) -> str:
     secondary: list[str] = []
     if elev_m > 0:
         secondary.append(f"📈 {int(elev_m)} m Anstieg")
-    if avg_power:
+    if avg_power and activity_type in _SPEED_TYPES:
+        power_str = f"⚡ Ø {int(avg_power)} W"
+        if max_power:
+            power_str += f" / Max {int(max_power)} W"
+        secondary.append(power_str)
+    elif avg_power:
         secondary.append(f"⚡ Ø {int(avg_power)} W")
     if avg_hr:
         secondary.append(f"❤️ Ø {int(avg_hr)} bpm")
