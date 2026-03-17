@@ -146,6 +146,16 @@ def process_user(
             except (ValueError, AttributeError):
                 act_time = None
 
+            # Skip very recent activities — let Garmin finish processing them
+            if existing is None and act_time is not None:
+                age = datetime.now(timezone.utc) - act_time
+                if age < timedelta(minutes=10):
+                    logger.info(
+                        "[%s] Skipping activity %s (only %ds old, waiting for next cycle).",
+                        name, garmin_id, int(age.total_seconds()),
+                    )
+                    continue
+
             if existing is None:
                 # ── New activity — download, store, then integrate ──────────
                 gpx_data = None
