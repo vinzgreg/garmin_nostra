@@ -211,8 +211,12 @@ class ActivityStore:
         self._conn = sqlite3.connect(db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         # WAL mode allows concurrent readers (e.g. manual sqlite3 queries)
-        # while the sync process is writing.
-        self._conn.execute("PRAGMA journal_mode=WAL")
+        # while the sync process is writing.  Silently skip if the DB is
+        # not yet writable (e.g. first-run before ownership is fixed).
+        try:
+            self._conn.execute("PRAGMA journal_mode=WAL")
+        except sqlite3.OperationalError as exc:
+            logger.warning("Could not enable WAL mode: %s", exc)
         self._conn.executescript(_DDL)
         self._migrate()
         self._conn.commit()
