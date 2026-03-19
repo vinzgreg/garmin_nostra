@@ -9,3 +9,8 @@ services:
     environment:
       - CONFIG_FILE=/app/config.toml
       - TZ=Europe/Berlin
+      # Secrets can be passed via env vars and referenced in config.toml
+      # with the "env:" prefix (e.g. mastodon_access_token = "env:MASTODON_TOKEN").
+      # Uncomment and fill in as needed:
+      # - MASTODON_TOKEN=your_token_here
+      # - CALDAV_PASSWORD=your_password_here

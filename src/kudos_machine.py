@@ -138,8 +138,20 @@ class KudosMachine:
         post_delay_s: float = 2.0,
     ) -> None:
         self._bot = bot
-        self._template = custom_template
         self._post_delay_s = post_delay_s
+
+        # Validate the custom template at startup so a typo doesn't crash
+        # every kudos attempt at runtime.
+        if custom_template:
+            try:
+                custom_template.format(fav_giver="@test", activity_user="@test")
+            except (KeyError, IndexError) as exc:
+                logger.error(
+                    "kudosCustom template is invalid (%s): %s — falling back to built-in messages.",
+                    exc, custom_template,
+                )
+                custom_template = None
+        self._template = custom_template
 
     def process_user(
         self,

@@ -103,11 +103,20 @@ class CalDAVPusher:
         )
 
     def push(self, activity: dict[str, Any]) -> None:
-        """Push a storage-schema activity dict as a VEVENT."""
+        """Push a storage-schema activity dict as a VEVENT.
+
+        On connection errors the cached calendar handle is cleared so the
+        next call will reconnect instead of failing repeatedly.
+        """
         gid = activity.get("garmin_activity_id", "unknown")
         logger.info("Sende Aktivität %s an CalDAV …", gid)
         ical_bytes = _build_vevent(activity)
-        self._get_calendar().save_event(ical_bytes.decode())
+        try:
+            self._get_calendar().save_event(ical_bytes.decode())
+        except (OSError, ConnectionError, caldav.lib.error.DAVError) as exc:
+            self._calendar = None
+            logger.warning("CalDAV connection lost, will reconnect on next push: %s", exc)
+            raise
         logger.info("CalDAV-Eintrag gespeichert für Aktivität %s.", gid)
 
 

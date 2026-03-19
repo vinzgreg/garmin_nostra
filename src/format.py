@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 # ── Localisation tables ──────────────────────────────────────────────────────
@@ -123,7 +123,7 @@ def build_mastodon_message(handle: str, activity: dict[str, Any]) -> str:
     try:
         dt = datetime.fromisoformat(start_str.replace(" ", "T"))
     except (ValueError, AttributeError):
-        dt = datetime.utcnow()
+        dt = datetime.now(timezone.utc)
 
     duration_s  = float(activity.get("duration_s")       or 0)
     distance_m  = float(activity.get("distance_m")       or 0)

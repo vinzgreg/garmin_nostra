@@ -3,29 +3,29 @@ set -e
 
 CONFIG_FILE="${CONFIG_FILE:-/app/config.toml}"
 
-# Read interval_minutes from config
+# Read interval_minutes from config — pass path via argv, not shell interpolation
 INTERVAL=$(python3 -c "
 import sys
 try:
     import tomllib
 except ImportError:
     import tomli as tomllib
-with open('${CONFIG_FILE}', 'rb') as f:
+with open(sys.argv[1], 'rb') as f:
     cfg = tomllib.load(f)
 print(cfg.get('sync', {}).get('interval_minutes', 60))
-")
+" "$CONFIG_FILE")
 
-echo "garmin-nostra: sync interval = ${INTERVAL} min"
+INTERVAL_S=$(( INTERVAL * 60 ))
+echo "garmin-nostra: sync interval = ${INTERVAL} min (${INTERVAL_S}s)"
 
-# Write crontab (log to stdout/stderr so docker logs shows cron runs)
-CRON_EXPR="*/${INTERVAL} * * * *"
-echo "${CRON_EXPR} root /usr/local/bin/python3 /app/src/sync.py /app/config.toml >> /proc/1/fd/1 2>> /proc/1/fd/2" \
-    > /etc/cron.d/garmin-nostra
-chmod 0644 /etc/cron.d/garmin-nostra
-
-# Initial sync on startup (non-fatal so cron daemon always starts)
+# Initial sync on startup (non-fatal so the loop always starts)
 echo "Running initial sync..."
-python3 /app/src/sync.py /app/config.toml || echo "Initial sync failed, cron will retry."
+python3 /app/src/sync.py "$CONFIG_FILE" || echo "Initial sync failed, loop will retry."
 
-echo "Starting cron daemon..."
-cron -f
+# Sleep loop replaces cron — no root required, logs go directly to stdout
+while true; do
+    echo "Sleeping ${INTERVAL} min until next sync..."
+    sleep "${INTERVAL_S}"
+    echo "Starting scheduled sync..."
+    python3 /app/src/sync.py "$CONFIG_FILE" || echo "Sync failed, will retry next cycle."
+done

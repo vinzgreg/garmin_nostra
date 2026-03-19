@@ -210,6 +210,9 @@ class ActivityStore:
 
         self._conn = sqlite3.connect(db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
+        # WAL mode allows concurrent readers (e.g. manual sqlite3 queries)
+        # while the sync process is writing.
+        self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.executescript(_DDL)
         self._migrate()
         self._conn.commit()

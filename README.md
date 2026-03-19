@@ -75,6 +75,12 @@ I have this data directory as part of my home directory. Don't be confused, in t
 mkdir -p ~/data/garminnostra
 ```
 
+The container runs as non-root user `appuser` (UID 1000). If your host user has a different UID, adjust ownership:
+
+```bash
+sudo chown -R 1000:1000 ~/data/garminnostra
+```
+
 ### 3. Build and start
 
 ```bash
@@ -82,7 +88,7 @@ docker compose up -d --build
 docker compose logs -f
 ```
 
-On first start the container runs an immediate sync, then schedules a cron job at the configured `interval_minutes`.
+On first start the container runs an immediate sync, then loops at the configured `interval_minutes`.
 
 ---
 
@@ -91,7 +97,7 @@ On first start the container runs an immediate sync, then schedules a cron job a
 ### Logs
 
 ```bash
-# All output (startup, cron runs, sync script) goes to Docker's log
+# All output (startup, sync runs) goes to Docker's log
 docker logs garmin-nostra -f
 ```
 
@@ -103,7 +109,7 @@ docker exec garmin-nostra tail -f /data/garmin_nostra.log
 
 ### Manual sync
 
-Trigger a sync immediately without waiting for the next cron run:
+Trigger a sync immediately without waiting for the next scheduled run:
 
 ```bash
 docker exec garmin-nostra python3 /app/src/sync.py /app/config.toml
@@ -146,7 +152,7 @@ docker exec garmin-nostra sqlite3 /data/garmin_nostra.db \
 docker compose restart garmin-nostra
 ```
 
-A change to `interval_minutes` requires a restart so the new cron schedule is written.
+A change to `interval_minutes` requires a restart so the new sleep interval takes effect.
 
 ### Rebuild after code changes
 
@@ -423,3 +429,76 @@ For `unlisted` posts, the post appears in the mentioned user's notifications and
 
 **CalDAV calendar not found**
 The calendar must already exist in Nextcloud. The error message lists available calendar names.
+
+---
+
+## Migrating from older versions
+
+### Non-root container (March 2026)
+
+The container no longer runs as `root`. Instead it uses a non-root user `appuser` with **UID 1000 / GID 1000**. This improves security but requires a one-time ownership fix on the data directory:
+
+```bash
+sudo chown -R 1000:1000 ~/data/garminnostra
+```
+
+> **Why?** Older versions ran as root inside Docker, so all files (GPX, FIT, maps, tokens, log, DB) were created with `root:root` ownership. The new non-root container cannot write to root-owned files.
+
+You can verify the result with:
+
+```bash
+# Should return nothing (= no files left with wrong ownership)
+find ~/data/garminnostra -not -user 1000 -ls
+```
+
+If your host user has a UID other than 1000, either adjust the `chown` to match the container's UID (1000), or override the container's user in `docker-compose.yml`:
+
+```yaml
+services:
+  garmin-nostra:
+    user: "1001:1001"   # replace with your host UID:GID
+```
+
+Then `chown` the data directory to match that UID instead.
+
+### Cron replaced by sleep loop (March 2026)
+
+The container no longer installs or uses `cron`. Sync scheduling is now a simple shell loop (`sleep` between runs). This means:
+
+- No behaviour change for typical use — sync still runs at the configured `interval_minutes`.
+- The interval is measured from end-of-sync to start-of-next-sync, not wall-clock aligned. For a 60-minute interval with a 2-minute sync, the next run starts at minute 62 instead of exactly on the hour. This is negligible in practice.
+- Logs go directly to stdout (no `/proc/1/fd` redirects), which is cleaner for `docker logs`.
+
+No action needed — just rebuild:
+
+```bash
+docker compose up -d --build
+```
+
+### Garmin API session reuse (March 2026)
+
+GPX and FIT downloads now reuse the already-authenticated Garmin session instead of creating a fresh client (with a full OAuth token exchange + profile fetch) for every single download. For a sync with *N* new activities this eliminates **2×N** redundant authentication round-trips, cutting per-activity overhead by ~2 seconds each.
+
+No action needed — the change is internal to `src/garmin.py`. Per-download timeouts via `ThreadPoolExecutor` are still in place.
+
+### Environment variable secrets (March 2026)
+
+Config values can now reference environment variables with the `env:` prefix. This is **opt-in** — existing plaintext configs work unchanged.
+
+Before (plaintext in config.toml):
+```toml
+mastodon_access_token = "abc123secrettoken"
+```
+
+After (secret in environment, reference in config):
+```toml
+mastodon_access_token = "env:MASTODON_TOKEN"
+```
+
+```yaml
+# docker-compose.yml
+environment:
+  - MASTODON_TOKEN=abc123secrettoken
+```
+
+This avoids storing secrets in the config file and works with Docker secrets, `.env` files, or CI/CD variable injection.

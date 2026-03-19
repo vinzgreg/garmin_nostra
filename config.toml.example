@@ -1,6 +1,12 @@
 # garmin-nostra — example configuration
 # Copy this to config.toml and fill in your credentials.
 # config.toml is git-ignored; this file is safe to commit.
+#
+# Secrets: any string value can reference an environment variable with
+# the "env:" prefix.  Example:
+#   mastodon_access_token = "env:MASTODON_TOKEN"
+# The variable must be set in docker-compose.yml (environment: section)
+# or passed via `docker run -e`.
 
 # ── Mastodon bot ────────────────────────────────────────────────────────────
 [bot]
@@ -17,10 +23,18 @@ mastodon_access_token  = "your_bot_access_token"
 
 # ── Sync behaviour ──────────────────────────────────────────────────────────
 [sync]
-# How often the cron job runs (minutes)
+# How often the cron job runs (minutes; values > 59 are valid, e.g. 120)
 interval_minutes = 60
 # How far back to look on the very first run per user
 lookback_days = 30
+# Skip GPX/FIT download or Mastodon posts for activities older than N days (optional)
+# gpx_max_age_days = 7
+# fit_max_age_days = 7
+# mastodon_max_age_days = 7
+# Seconds between consecutive Mastodon posts (rate-limit safety)
+# mastodon_post_delay_s = 2.0
+# Timeout in seconds for external HTTP calls
+# request_timeout_s = 30
 
 # ── Optional shared CalDAV server ───────────────────────────────────────────
 # Remove or leave empty to disable CalDAV globally.
@@ -35,8 +49,11 @@ calendar_name = "Fitness"
 [storage]
 db_path   = "/data/garmin_nostra.db"
 gpx_dir   = "/data/gpx"
+fit_dir   = "/data/fit"
 map_dir   = "/data/maps"
 token_dir = "/data/tokens"
+# log_level = "info"           # debug, info, or error
+# log_file  = "/data/garmin_nostra.log"
 
 # ── Users ───────────────────────────────────────────────────────────────────
 # Add one [[users]] block per Garmin Connect account.

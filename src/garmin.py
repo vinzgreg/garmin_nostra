@@ -79,19 +79,17 @@ class GarminClient:
 
         Paginates through the Garmin API until it reaches activities older than *since*
         or an empty page. *timeout* caps the entire pagination loop.
+
+        Uses a background thread so the timeout works regardless of which thread
+        calls this method (unlike the previous SIGALRM approach).
         """
-        import signal
+        import concurrent.futures
 
-        def _timeout_handler(signum, frame):
-            raise TimeoutError(f"get_activities_since timed out after {timeout}s")
+        client = self._client_()
 
-        client  = self._client_()
-        result  = []
-        start   = 0
-
-        old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
-        signal.alarm(timeout)
-        try:
+        def _paginate() -> list[dict[str, Any]]:
+            result: list[dict[str, Any]] = []
+            start = 0
             while True:
                 page = client.get_activities(start, page_size)
                 if not page:
@@ -110,14 +108,20 @@ class GarminClient:
                         result.append(act)
                         page_had_match = True
 
-                # If no activity on this page was newer than *since*, we're done
                 if not page_had_match:
                     break
 
                 start += page_size
+            return result
+
+        ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        future = ex.submit(_paginate)
+        try:
+            result = future.result(timeout=timeout)
+        except concurrent.futures.TimeoutError:
+            raise TimeoutError(f"get_activities_since timed out after {timeout}s")
         finally:
-            signal.alarm(0)
-            signal.signal(signal.SIGALRM, old_handler)
+            ex.shutdown(wait=False)
 
         logger.info(
             "Found %d activities since %s for %s.",
@@ -125,41 +129,25 @@ class GarminClient:
         )
         return result
 
-    def _fresh_download_client(self) -> Garmin:
-        """Return a new Garmin instance loaded from the token cache.
-
-        Uses no network call when tokens are valid — just reads from disk.
-        A fresh client ensures a hung download thread cannot block the next
-        download via shared connection-pool state.
-        """
-        c = Garmin(self._username, self._password)
-        c.login(self._tokenstore)
-        self._apply_timeout(c)
-        return c
-
     def get_gpx(self, activity_id: int | str, timeout: int = 30) -> bytes:
-        """Download GPX bytes for *activity_id* with a hard *timeout* in seconds.
-
-        Both client creation (login/profile fetch) and the download run inside
-        the thread so the full operation is subject to the timeout.
-        """
+        """Download GPX bytes for *activity_id* with a hard *timeout* in seconds."""
         import concurrent.futures
 
+        client = self._client_()
+
         def _download() -> bytes:
-            c = self._fresh_download_client()
-            return c.download_activity(
-                activity_id, dl_fmt=c.ActivityDownloadFormat.GPX
+            return client.download_activity(
+                activity_id, dl_fmt=client.ActivityDownloadFormat.GPX
             )
 
         ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         future = ex.submit(_download)
         try:
-            result = future.result(timeout=timeout)
-            ex.shutdown(wait=False)
-            return result
+            return future.result(timeout=timeout)
         except concurrent.futures.TimeoutError:
-            ex.shutdown(wait=False)
             raise TimeoutError(f"GPX download timed out after {timeout}s")
+        finally:
+            ex.shutdown(wait=False)
 
     def get_fit(self, activity_id: int | str, timeout: int = 30) -> bytes:
         """Download original FIT bytes for *activity_id* with a hard *timeout* in seconds.
@@ -171,10 +159,11 @@ class GarminClient:
         import io
         import zipfile
 
+        client = self._client_()
+
         def _download() -> bytes:
-            c = self._fresh_download_client()
-            zip_bytes = c.download_activity(
-                activity_id, dl_fmt=c.ActivityDownloadFormat.ORIGINAL
+            zip_bytes = client.download_activity(
+                activity_id, dl_fmt=client.ActivityDownloadFormat.ORIGINAL
             )
             with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
                 fit_names = [n for n in zf.namelist() if n.lower().endswith(".fit")]
@@ -185,9 +174,8 @@ class GarminClient:
         ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         future = ex.submit(_download)
         try:
-            result = future.result(timeout=timeout)
-            ex.shutdown(wait=False)
-            return result
+            return future.result(timeout=timeout)
         except concurrent.futures.TimeoutError:
-            ex.shutdown(wait=False)
             raise TimeoutError(f"FIT download timed out after {timeout}s")
+        finally:
+            ex.shutdown(wait=False)

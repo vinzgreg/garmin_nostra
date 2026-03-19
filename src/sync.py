@@ -67,9 +67,35 @@ def _acquire_lock() -> int:
     return fd
 
 
+def _resolve_env_vars(obj):
+    """Recursively resolve 'env:VAR_NAME' strings to environment variable values.
+
+    This allows sensitive config values (passwords, tokens) to be pulled
+    from the environment or Docker secrets instead of being stored in
+    plaintext in config.toml.
+
+    Example:  mastodon_access_token = "env:MASTODON_TOKEN"
+    """
+    if isinstance(obj, str) and obj.startswith("env:"):
+        var_name = obj[4:]
+        value = os.environ.get(var_name)
+        if value is None:
+            raise ValueError(
+                f"Config references env:{var_name} but the environment "
+                f"variable {var_name} is not set."
+            )
+        return value
+    if isinstance(obj, dict):
+        return {k: _resolve_env_vars(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_resolve_env_vars(item) for item in obj]
+    return obj
+
+
 def load_config(path: str) -> dict:
     with open(path, "rb") as f:
-        return tomllib.load(f)
+        cfg = tomllib.load(f)
+    return _resolve_env_vars(cfg)
 
 
 def _build_caldav_pusher(cfg: dict, timeout: int = 30) -> CalDAVPusher | None:
@@ -208,8 +234,7 @@ def process_user(
                 # ── Known activity — check if any integration needs retry ───
                 activity_row = existing
                 logger.debug("[%s] Aktivität %s bereits bekannt.", name, garmin_id)
-                map_path = Path(existing["gpx_path"]).with_suffix(".png") \
-                    if existing.get("gpx_path") else None
+                map_path = store.map_path(name, garmin_id)
                 # Only retry if not yet done
                 if existing["caldav_pushed"] and existing["mastodon_posted"]:
                     continue
@@ -245,7 +270,7 @@ def process_user(
             processed += 1
 
         store.finish_sync_run(run_id, found, processed, "success")
-        logger.info("[%s] Sync abgeschlossen. %d neu / %d verarbeitet.", name, found, processed)
+        logger.info("[%s] Sync abgeschlossen. %d gefunden / %d verarbeitet.", name, found, processed)
 
     except Exception as exc:
         store.finish_sync_run(run_id, found, processed, "failed", str(exc))
@@ -267,10 +292,12 @@ def run(config_path: str) -> None:
     lock_fd = _acquire_lock()
     cfg = load_config(config_path)
 
-    # Apply a process-wide socket timeout so every HTTP call (Garmin, CalDAV,
-    # OSM tiles, Mastodon) is capped at the configured value.  This works at
-    # the OS level and is more reliable than SIGALRM with httpx/requests.
-    socket.setdefaulttimeout(cfg.get("sync", {}).get("request_timeout_s", 30))
+    # Safety ceiling: cap any socket that lacks its own timeout so a hung
+    # connection cannot block the process forever.  Set higher than the
+    # per-client timeout to avoid interfering with legitimate slow operations
+    # (e.g. large GPX downloads).
+    request_timeout_cfg = cfg.get("sync", {}).get("request_timeout_s", 30)
+    socket.setdefaulttimeout(max(request_timeout_cfg * 4, 120))
 
     storage_cfg = cfg.get("storage", {})
     if level_str := storage_cfg.get("log_level"):
