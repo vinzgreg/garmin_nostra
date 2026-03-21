@@ -125,6 +125,8 @@ def process_user(
     mastodon_max_age_days: int | None = None,
     mastodon_post_delay_s: float = 2.0,
     kudos_machine: KudosMachine | None = None,
+    tag_source: bool = False,
+    dedup_with_wahoo: bool = False,
 ) -> None:
     name   = user_cfg["name"]
     handle = user_cfg.get("mastodon_handle")
@@ -185,6 +187,23 @@ def process_user(
                     continue
 
             if existing is None:
+                # ── Cross-source dedup: skip if a Wahoo activity with the
+                #    same start time is already in the DB (e.g. Wahoo
+                #    auto-synced this workout to Garmin and we already
+                #    processed it from the Wahoo side). ───────────────────────
+                if dedup_with_wahoo and act_time is not None:
+                    start_str_db = act_time.strftime("%Y-%m-%d %H:%M:%S")
+                    dupe = store.get_activity_near_time(
+                        user_id, start_str_db, window_s=120, source="WahooNoStra"
+                    )
+                    if dupe:
+                        logger.info(
+                            "[%s] Skipping Garmin activity %s — already imported as "
+                            "Wahoo activity %s.",
+                            name, garmin_id, dupe["garmin_activity_id"],
+                        )
+                        continue
+
                 # ── New activity — download, store, then integrate ──────────
                 gpx_data = None
                 gpx_path = None
@@ -230,7 +249,10 @@ def process_user(
                     map_path = render_map(gpx_data, map_path, timeout=request_timeout)
 
                 logger.debug("[%s] Saving activity %s to DB", name, garmin_id)
-                activity_row = store.save_activity(user_id, act, gpx_path, fit_path)
+                activity_row = store.save_activity(
+                    user_id, act, gpx_path, fit_path,
+                    name_prefix="[Garmin] " if tag_source else None,
+                )
                 logger.info("[%s] New activity saved: %s", name, garmin_id)
             else:
                 # ── Known activity — check if any integration needs retry ───
@@ -585,6 +607,39 @@ def run(config_path: str) -> None:
                     user_cfg, store, bot, caldav_pusher, lookback_days,
                     request_timeout, fit_max_age_days, mastodon_max_age_days,
                     mastodon_post_delay_s, kudos_machine,
+                )
+            elif source == "both":
+                # Validate both credential sets
+                wahoo_missing = [
+                    k for k in ("wahoo_client_id", "wahoo_client_secret", "wahoo_refresh_token")
+                    if not user_cfg.get(k)
+                ]
+                garmin_missing = [
+                    k for k in ("garmin_username", "garmin_password")
+                    if not user_cfg.get(k)
+                ]
+                if wahoo_missing or garmin_missing:
+                    logger.error(
+                        "User %s has source='both' but is missing credentials: %s",
+                        user_cfg.get("name"),
+                        ", ".join(wahoo_missing + garmin_missing),
+                    )
+                    continue
+                # Wahoo runs first so its activities are in the DB before
+                # Garmin dedup checks run. Activities are tagged [Wahoo] /
+                # [Garmin] to make the source visible in Mastodon posts.
+                # Garmin skips any activity whose start time matches a
+                # Wahoo entry already in the DB (cross-source dedup).
+                process_user_wahoo(
+                    user_cfg, store, bot, caldav_pusher, lookback_days,
+                    request_timeout, fit_max_age_days, mastodon_max_age_days,
+                    mastodon_post_delay_s, kudos_machine,
+                )
+                process_user(
+                    user_cfg, store, bot, caldav_pusher, lookback_days,
+                    request_timeout, gpx_max_age_days, fit_max_age_days,
+                    mastodon_max_age_days, mastodon_post_delay_s, kudos_machine,
+                    tag_source=True, dedup_with_wahoo=True,
                 )
             else:
                 process_user(

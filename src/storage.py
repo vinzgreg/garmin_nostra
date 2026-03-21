@@ -278,14 +278,45 @@ class ActivityStore:
         ).fetchone()
         return dict(row) if row else None
 
+    def get_activity_near_time(
+        self, user_id: int, start_time_utc: str, window_s: int = 120, source: str | None = None
+    ) -> dict | None:
+        """Return any activity for user_id whose start_time_utc is within window_s seconds.
+
+        Used for cross-source dedup: detects when the same physical workout
+        exists in both Garmin and Wahoo (e.g. Wahoo auto-synced to Garmin).
+        Pass source='WahooNoStra' to restrict to Wahoo-origin activities.
+        """
+        query = (
+            "SELECT * FROM activities "
+            "WHERE user_id = ? "
+            "AND ABS(CAST(strftime('%s', start_time_utc) AS INTEGER) "
+            "      - CAST(strftime('%s', ?) AS INTEGER)) <= ?"
+        )
+        params: list = [user_id, start_time_utc, window_s]
+        if source:
+            query += " AND source = ?"
+            params.append(source)
+        query += " LIMIT 1"
+        row = self._conn.execute(query, params).fetchone()
+        return dict(row) if row else None
+
     def save_activity(
-        self, user_id: int, raw_activity: dict, gpx_path: Path | None = None, fit_path: Path | None = None
+        self,
+        user_id: int,
+        raw_activity: dict,
+        gpx_path: Path | None = None,
+        fit_path: Path | None = None,
+        name_prefix: str | None = None,
     ) -> dict:
         """
         Insert activity into DB (ignore if already exists).
         Returns the mapped row dict (usable for message formatting).
+        *name_prefix* (e.g. "[Garmin] ") is prepended to activity_name when set.
         """
         row = _map_activity(user_id, raw_activity)
+        if name_prefix and row.get("activity_name"):
+            row["activity_name"] = name_prefix + row["activity_name"]
         if gpx_path:
             row["gpx_path"] = str(gpx_path)
         if fit_path:

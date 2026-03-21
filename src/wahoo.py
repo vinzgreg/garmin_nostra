@@ -328,7 +328,7 @@ def map_wahoo_activity(user_id: int, workout: dict, summary: dict) -> dict:
     return {
         "user_id":                 user_id,
         "garmin_activity_id":      workout_id,
-        "activity_name":           workout.get("name") or summary.get("name"),
+        "activity_name":           "[Wahoo] " + (workout.get("name") or summary.get("name") or "Workout"),
         "activity_type":           activity_type,
         "sport_type":              activity_type,
         "start_time_utc":          start_utc,

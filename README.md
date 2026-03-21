@@ -133,7 +133,9 @@ The script will:
 
 ### 3. Configure the user
 
-Add a `[[users]]` block with `source = "wahoo"` to `config.toml`:
+There are three source modes. Choose the one that fits your setup:
+
+#### `source = "wahoo"` — Wahoo only
 
 ```toml
 [[users]]
@@ -154,9 +156,38 @@ environment:
   - CAROL_WAHOO_REFRESH_TOKEN=your_refresh_token
 ```
 
+#### `source = "garmin"` — Garmin only (default)
+
+```toml
+[[users]]
+name            = "alice"
+garmin_username = "alice@example.com"
+garmin_password = "env:ALICE_GARMIN_PASSWORD"
+mastodon_handle = "@alice@mastodon.social"
+```
+
+#### `source = "both"` — Wahoo and Garmin, deduplicated
+
+Syncs from both platforms in a single user block. Wahoo is processed first.
+Activities are tagged `[Wahoo]` or `[Garmin]` in the database and Mastodon posts.
+
+If a Wahoo workout was auto-synced to Garmin (e.g. via the native Wahoo→Garmin integration), garmin-nostra detects the duplicate by matching start times (±2 minute window) and skips the Garmin copy. Nothing is posted or stored twice.
+
+```toml
+[[users]]
+name                = "dave"
+source              = "both"
+wahoo_client_id     = "your_client_id_here"
+wahoo_client_secret = "your_client_secret_here"
+wahoo_refresh_token = "your_refresh_token_here"
+garmin_username     = "dave@example.com"
+garmin_password     = "your_garmin_password_here"
+mastodon_handle     = "@dave@mastodon.social"
+```
+
 ### 4. Optional: sync Wahoo activities to Garmin Connect
 
-To upload Wahoo activities to Garmin Connect automatically, add Garmin credentials to the same user block:
+Only relevant for `source = "wahoo"`. To upload Wahoo activities to Garmin Connect automatically, add Garmin credentials to the same user block:
 
 ```toml
 wahoo_sync_to_garmin = true
@@ -165,6 +196,8 @@ garmin_password      = "env:CAROL_GARMIN_PASSWORD"
 ```
 
 Activities are uploaded as FIT files. If Wahoo has already synced the same activity to Garmin natively, the duplicate is detected and skipped.
+
+> **Note:** Do not combine `wahoo_sync_to_garmin = true` with `source = "both"` — in "both" mode each platform is fetched independently, so uploading in one direction would create duplicates.
 
 ---
 
@@ -317,7 +350,7 @@ One block per account (Garmin or Wahoo):
 | Key | Required | Description |
 |---|---|---|
 | `name` | ✓ | Unique identifier used for file/token paths |
-| `source` | `"garmin"` | `"garmin"` (default) or `"wahoo"` — selects the activity source |
+| `source` | `"garmin"` | `"garmin"` (default), `"wahoo"`, or `"both"` — selects the activity source. `"both"` fetches from Wahoo and Garmin, deduplicating by start time |
 | `garmin_username` | Garmin/sync | Garmin Connect e-mail (required for `source = "garmin"` or `wahoo_sync_to_garmin`) |
 | `garmin_password` | Garmin/sync | Garmin Connect password |
 | `wahoo_client_id` | Wahoo | Wahoo developer app client ID |
@@ -394,7 +427,7 @@ One row per activity per user. Key columns:
 | `raw_json` | TEXT | Full Garmin API payload |
 | `gpx_path` | TEXT | Path to saved GPX file |
 | `fit_path` | TEXT | Path to saved FIT file |
-| `source` | TEXT | Origin of the record (always `GarminNoStra`) |
+| `source` | TEXT | Origin of the record: `GarminNoStra` or `WahooNoStra` |
 | `caldav_pushed` | INTEGER | 0/1 |
 | `mastodon_posted` | INTEGER | 0/1 |
 

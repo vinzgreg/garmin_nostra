@@ -90,8 +90,7 @@ caldav_enabled   = false
 # suppressKudos  = true   # uncomment to opt out of kudos replies
 # mastodon_suppress_types = ["*pilates*", "*strength*", "yoga"]
 
-# Example: Wahoo user with optional sync to Garmin Connect
-#
+# ── source = "wahoo" — fetch from Wahoo only ────────────────────────────────
 # Option A — credentials stored directly in this file:
 # [[users]]
 # name                  = "carol"
@@ -101,7 +100,7 @@ caldav_enabled   = false
 # wahoo_refresh_token   = "your_refresh_token_here"
 # mastodon_handle       = "@carol@mastodon.social"
 # caldav_enabled        = false
-# wahoo_sync_to_garmin  = true       # upload Wahoo activities to Garmin Connect
+# wahoo_sync_to_garmin  = true       # upload Wahoo FIT files to Garmin Connect
 # garmin_username       = "carol@example.com"   # required if wahoo_sync_to_garmin = true
 # garmin_password       = "your_garmin_password_here"
 #
@@ -118,3 +117,19 @@ caldav_enabled   = false
 # wahoo_sync_to_garmin  = true
 # garmin_username       = "carol@example.com"
 # garmin_password       = "env:CAROL_GARMIN_PASSWORD"
+
+# ── source = "both" — fetch from Wahoo AND Garmin, dedup automatically ──────
+# Wahoo is processed first. Activities are tagged [Wahoo] or [Garmin] in the
+# DB and Mastodon posts. If an activity from Wahoo was auto-synced to Garmin
+# (outside garmin-nostra), the Garmin copy is skipped automatically based on
+# matching start time (±2 min window). Nothing is posted or stored twice.
+# [[users]]
+# name                  = "dave"
+# source                = "both"
+# wahoo_client_id       = "your_client_id_here"
+# wahoo_client_secret   = "your_client_secret_here"
+# wahoo_refresh_token   = "your_refresh_token_here"
+# garmin_username       = "dave@example.com"
+# garmin_password       = "your_garmin_password_here"
+# mastodon_handle       = "@dave@mastodon.social"
+# caldav_enabled        = false
