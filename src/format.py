@@ -23,6 +23,12 @@ ACTIVITY_TYPES: dict[str, tuple[str, str, str]] = {
     "mountain_biking":          ("Mountainbiken",            "🚵",  "#Mountainbike"),
     "indoor_cycling":           ("Radfahren (Indoor)",       "🚴",  "#Radfahren"),
     "road_biking":              ("Rennrad",                  "🚴",  "#Radfahren"),
+    "gravel_cycling":           ("Gravel",                   "🚴",  "#Radfahren"),
+    "e_bike_fitness":           ("E-Bike",                   "🚴",  "#Radfahren"),
+    "fahrrad":                  ("Radfahren",               "🚴",  "#Radfahren"),
+    "radfahrt":                 ("Radfahrt",                "🚴",  "#Radfahren"),
+    "virtual_ride":             ("Virtuelle Ausfahrt",       "🚴",  "#Radfahren"),
+    "virtuelle radfahrt":       ("Virtuelle Radfahrt",       "🚴",  "#Radfahren"),
     "swimming":                 ("Schwimmen",               "🏊",  "#Schwimmen"),
     "open_water_swimming":      ("Freiwasserschwimmen",      "🏊",  "#Schwimmen"),
     "lap_swimming":             ("Bahnschwimmen",            "🏊",  "#Schwimmen"),
@@ -44,8 +50,13 @@ ACTIVITY_TYPES: dict[str, tuple[str, str, str]] = {
 
 _SPEED_TYPES = {
     "cycling", "mountain_biking", "indoor_cycling", "road_biking",
-    "stand_up_paddleboarding",
+    "gravel_cycling", "e_bike_fitness", "fahrrad", "radfahrt",
+    "virtual_ride", "virtuelle radfahrt", "stand_up_paddleboarding",
 }
+
+
+def _is_speed_type(activity_type: str) -> bool:
+    return activity_type in _SPEED_TYPES or "cycling" in activity_type or "biking" in activity_type
 _PACE_TYPES = {
     "running", "trail_running", "treadmill_running",
     "hiking", "walking",
@@ -149,7 +160,7 @@ def build_mastodon_message(handle: str, activity: dict[str, Any]) -> str:
         primary.append(f"📏 {fmt_num(distance_m / 1000.0, 2)} km")
     if activity_type in _PACE_TYPES and distance_m > 0 and duration_s > 0:
         primary.append(f"💨 {fmt_pace(duration_s, distance_m)}")
-    elif activity_type in _SPEED_TYPES and distance_m > 0 and duration_s > 0:
+    elif _is_speed_type(activity_type) and distance_m > 0 and duration_s > 0:
         primary.append(f"💨 {fmt_speed(distance_m, duration_s)}")
     if primary:
         lines.append("  ".join(primary))
@@ -158,7 +169,7 @@ def build_mastodon_message(handle: str, activity: dict[str, Any]) -> str:
     secondary: list[str] = []
     if elev_m > 0:
         secondary.append(f"📈 {int(elev_m)} m Anstieg")
-    if avg_power and activity_type in _SPEED_TYPES:
+    if avg_power and _is_speed_type(activity_type):
         power_str = f"⚡ Ø {int(avg_power)} W"
         if max_power:
             power_str += f" / Max {int(max_power)} W"
