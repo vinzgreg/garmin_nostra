@@ -93,6 +93,81 @@ On first start the container runs an immediate sync, then loops at the configure
 
 ---
 
+## Wahoo setup
+
+To sync activities from a Wahoo account you need a Wahoo developer app and an OAuth refresh token. This is a one-time setup per user.
+
+### 1. Register a Wahoo developer app
+
+1. Go to [developers.wahooligan.com/cloud](https://developers.wahooligan.com/cloud) and sign in with your Wahoo account.
+2. Create a new application with the following settings:
+
+   | Field | Value |
+   |---|---|
+   | **Redirect URI** | `https://localhost` |
+   | **Environment** | Sandbox (switch to Production once confirmed working) |
+   | **Confidential** | Yes |
+   | **Webhook** | Leave blank — not needed (garmin-nostra polls the API) |
+
+3. Note the **Client ID** and **Client Secret** from the app page.
+
+### 2. Obtain a refresh token
+
+Run the bootstrap helper (on the host or inside the container):
+
+```bash
+# On the host (if you have Python + requests installed):
+python3 src/wahoo_auth.py <client_id> <client_secret>
+
+# Or inside a running container:
+docker exec -it garmin-nostra python3 /app/src/wahoo_auth.py <client_id> <client_secret>
+```
+
+The script will:
+1. Print an authorization URL and open it in your browser.
+2. After you authorize, the browser redirects to `https://localhost?code=…` — the page will **not load** (this is expected).
+3. Copy the `code` parameter from the browser's address bar and paste it back into the script.
+4. The script prints your **refresh token**.
+
+> **Note:** Wahoo refresh tokens expire after **60 days of inactivity**. As long as garmin-nostra syncs regularly, the token is refreshed automatically. If sync is paused for more than 60 days, re-run the bootstrap.
+
+### 3. Configure the user
+
+Add a `[[users]]` block with `source = "wahoo"` to `config.toml`:
+
+```toml
+[[users]]
+name                = "carol"
+source              = "wahoo"
+wahoo_client_id     = "env:CAROL_WAHOO_CLIENT_ID"
+wahoo_client_secret = "env:CAROL_WAHOO_CLIENT_SECRET"
+wahoo_refresh_token = "env:CAROL_WAHOO_REFRESH_TOKEN"
+mastodon_handle     = "@carol@mastodon.social"
+```
+
+Store the actual values as environment variables in `docker-compose.yml`:
+
+```yaml
+environment:
+  - CAROL_WAHOO_CLIENT_ID=your_client_id
+  - CAROL_WAHOO_CLIENT_SECRET=your_client_secret
+  - CAROL_WAHOO_REFRESH_TOKEN=your_refresh_token
+```
+
+### 4. Optional: sync Wahoo activities to Garmin Connect
+
+To upload Wahoo activities to Garmin Connect automatically, add Garmin credentials to the same user block:
+
+```toml
+wahoo_sync_to_garmin = true
+garmin_username      = "carol@example.com"
+garmin_password      = "env:CAROL_GARMIN_PASSWORD"
+```
+
+Activities are uploaded as FIT files. If Wahoo has already synced the same activity to Garmin natively, the duplicate is detected and skipped.
+
+---
+
 ## Operations
 
 ### Logs
@@ -437,15 +512,7 @@ The `staticmap` library fetches tiles from `tile.openstreetmap.org`. Make sure t
 For `unlisted` posts, the post appears in the mentioned user's notifications and on the bot's profile, but not on the public timeline. To make posts appear publicly, set `mastodon_public = true` for that user. On some instances, mentions from unfollowed accounts land in filtered notifications.
 
 **Wahoo authentication fails**
-Run the OAuth bootstrap helper to obtain a fresh refresh token:
-
-```bash
-docker exec -it garmin-nostra python3 /app/src/wahoo_auth.py <client_id> <client_secret>
-```
-
-Open the printed URL in your browser, authorise the app, and paste the code back. The script prints the `refresh_token` to store in `config.toml` (or as an environment variable).
-
-Wahoo refresh tokens expire after 60 days of inactivity. If sync stops working for a Wahoo user, re-run the bootstrap.
+Re-run the OAuth bootstrap to obtain a fresh refresh token — see [Wahoo setup](#wahoo-setup) above for the full procedure. Wahoo refresh tokens expire after 60 days of inactivity.
 
 **Wahoo activities have no map image**
 Wahoo does not provide GPX files. Map rendering is currently only available for Garmin activities. FIT files are downloaded and stored.
@@ -528,30 +595,8 @@ This avoids storing secrets in the config file and works with Docker secrets, `.
 
 ### Wahoo support (March 2026)
 
-Users can now sync activities from Wahoo instead of (or in addition to) Garmin Connect. This is **opt-in** — existing Garmin-only configurations work unchanged without any modifications.
+Users can now sync activities from Wahoo instead of Garmin Connect. This is **opt-in** — existing Garmin-only configurations work unchanged without any modifications.
 
-To add a Wahoo user:
-
-1. Register a developer app at [developers.wahooligan.com](https://developers.wahooligan.com/cloud) to get a `client_id` and `client_secret`.
-2. Run the OAuth bootstrap to get a refresh token:
-   ```bash
-   python3 src/wahoo_auth.py <client_id> <client_secret>
-   ```
-3. Add a `[[users]]` block with `source = "wahoo"`:
-   ```toml
-   [[users]]
-   name                = "carol"
-   source              = "wahoo"
-   wahoo_client_id     = "env:CAROL_WAHOO_CLIENT_ID"
-   wahoo_client_secret = "env:CAROL_WAHOO_CLIENT_SECRET"
-   wahoo_refresh_token = "env:CAROL_WAHOO_REFRESH_TOKEN"
-   mastodon_handle     = "@carol@mastodon.social"
-   ```
-4. To also upload Wahoo activities to Garmin Connect, add:
-   ```toml
-   wahoo_sync_to_garmin = true
-   garmin_username      = "carol@example.com"
-   garmin_password      = "env:CAROL_GARMIN_PASSWORD"
-   ```
+See [Wahoo setup](#wahoo-setup) for the full setup procedure (developer app registration, OAuth bootstrap, config).
 
 The database schema is extended automatically (two new columns added on first run). No manual migration needed.

@@ -26,7 +26,7 @@ import requests
 _API_BASE = "https://api.wahooligan.com"
 _AUTH_URL = f"{_API_BASE}/oauth/authorize"
 _TOKEN_URL = f"{_API_BASE}/oauth/token"
-_DEFAULT_REDIRECT = "urn:ietf:wg:oauth:2.0:oob"
+_DEFAULT_REDIRECT = "https://localhost"
 _SCOPES = "user_read workouts_read offline_data"
 
 
@@ -63,6 +63,11 @@ def main() -> None:
         pass
 
     # Step 2: Get the authorization code from the user
+    print()
+    print("After authorizing, your browser will redirect to https://localhost")
+    print("which will show an error page (this is expected). Copy the 'code'")
+    print("parameter from the URL bar, e.g.:")
+    print("  https://localhost?code=THIS_PART_HERE")
     print()
     code = input("Paste the authorization code here: ").strip()
     if not code:
