@@ -137,13 +137,21 @@ class WahooClient:
         """
         session = self._get_session()
 
+        # Wahoo API requires updated_after for the workouts endpoint
+        updated_after = since.strftime("%Y-%m-%dT%H:%M:%S")
+
         def _paginate() -> list[dict[str, Any]]:
             result: list[dict[str, Any]] = []
             page = 1
             while True:
+                params = {
+                    "page": page,
+                    "per_page": per_page,
+                    "updated_after": updated_after,
+                }
                 resp = session.get(
                     f"{_API_BASE}/v1/workouts",
-                    params={"page": page, "per_page": per_page},
+                    params=params,
                     timeout=self._timeout,
                 )
                 if resp.status_code == 401:
@@ -152,7 +160,7 @@ class WahooClient:
                     session.headers["Authorization"] = f"Bearer {self._access_token}"
                     resp = session.get(
                         f"{_API_BASE}/v1/workouts",
-                        params={"page": page, "per_page": per_page},
+                        params=params,
                         timeout=self._timeout,
                     )
                 resp.raise_for_status()
@@ -162,24 +170,7 @@ class WahooClient:
                 if not workouts:
                     break
 
-                page_had_match = False
-                for workout in workouts:
-                    starts_str = workout.get("starts") or ""
-                    try:
-                        workout_time = datetime.fromisoformat(
-                            starts_str.replace("Z", "+00:00")
-                        )
-                        if workout_time.tzinfo is None:
-                            workout_time = workout_time.replace(tzinfo=timezone.utc)
-                    except (ValueError, AttributeError):
-                        continue
-
-                    if workout_time > since:
-                        result.append(workout)
-                        page_had_match = True
-
-                if not page_had_match:
-                    break
+                result.extend(workouts)
 
                 total = data.get("total", 0)
                 if page * per_page >= total:

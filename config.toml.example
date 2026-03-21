@@ -91,6 +91,22 @@ caldav_enabled   = false
 # mastodon_suppress_types = ["*pilates*", "*strength*", "yoga"]
 
 # Example: Wahoo user with optional sync to Garmin Connect
+#
+# Option A — credentials stored directly in this file:
+# [[users]]
+# name                  = "carol"
+# source                = "wahoo"
+# wahoo_client_id       = "your_client_id_here"
+# wahoo_client_secret   = "your_client_secret_here"
+# wahoo_refresh_token   = "your_refresh_token_here"
+# mastodon_handle       = "@carol@mastodon.social"
+# caldav_enabled        = false
+# wahoo_sync_to_garmin  = true       # upload Wahoo activities to Garmin Connect
+# garmin_username       = "carol@example.com"   # required if wahoo_sync_to_garmin = true
+# garmin_password       = "your_garmin_password_here"
+#
+# Option B — credentials injected via Docker environment variables
+#            (use env:VAR_NAME as the value; set the variable in docker-compose.yml):
 # [[users]]
 # name                  = "carol"
 # source                = "wahoo"
@@ -99,6 +115,6 @@ caldav_enabled   = false
 # wahoo_refresh_token   = "env:CAROL_WAHOO_REFRESH_TOKEN"
 # mastodon_handle       = "@carol@mastodon.social"
 # caldav_enabled        = false
-# wahoo_sync_to_garmin  = true       # upload Wahoo activities to Garmin Connect
-# garmin_username       = "carol@example.com"   # required if wahoo_sync_to_garmin = true
+# wahoo_sync_to_garmin  = true
+# garmin_username       = "carol@example.com"
 # garmin_password       = "env:CAROL_GARMIN_PASSWORD"
