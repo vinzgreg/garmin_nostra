@@ -35,7 +35,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger("sync")
 
-_LOG_LEVELS = {"debug": logging.DEBUG, "info": logging.INFO, "error": logging.ERROR}
+_LOG_LEVELS = {
+    "debug": logging.DEBUG,
+    "info": logging.INFO,
+    "warning": logging.WARNING,
+    "error": logging.ERROR,
+}
 
 
 def _set_log_level(level_str: str) -> None:
@@ -127,6 +132,7 @@ def process_user(
     kudos_machine: KudosMachine | None = None,
     tag_source: bool = False,
     dedup_with_wahoo: bool = False,
+    skip_kudos: bool = False,
 ) -> None:
     name   = user_cfg["name"]
     handle = user_cfg.get("mastodon_handle")
@@ -311,7 +317,8 @@ def process_user(
         logger.error("[%s] Sync failed: %s", name, exc, exc_info=True)
 
     # ── KudosMachine — runs after every invocation, even if Garmin sync failed ─
-    if kudos_machine is not None and handle and not user_cfg.get("suppressKudos", False):
+    # skip_kudos=True when called from "both" mode — Wahoo side already ran it
+    if kudos_machine is not None and handle and not skip_kudos and not user_cfg.get("suppressKudos", False):
         logger.debug("[%s] Running KudosMachine.", name)
         try:
             kudos_machine.process_user(
@@ -539,6 +546,14 @@ def process_user_wahoo(
 
 def run(config_path: str) -> None:
     lock_fd = _acquire_lock()
+    try:
+        _run_inner(config_path)
+    finally:
+        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        os.close(lock_fd)
+
+
+def _run_inner(config_path: str) -> None:
     cfg = load_config(config_path)
 
     # Safety ceiling: cap any socket that lacks its own timeout so a hung
@@ -562,97 +577,100 @@ def run(config_path: str) -> None:
         token_dir=storage_cfg.get("token_dir", "/data/tokens"),
     )
 
-    sync_cfg        = cfg.get("sync", {})
-    lookback_days   = sync_cfg.get("lookback_days", 30)
-    request_timeout = sync_cfg.get("request_timeout_s", 30)
-    gpx_max_age_days        = sync_cfg.get("gpx_max_age_days", None)
-    fit_max_age_days        = sync_cfg.get("fit_max_age_days", None)
-    mastodon_max_age_days   = sync_cfg.get("mastodon_max_age_days", None)
-    mastodon_post_delay_s   = float(sync_cfg.get("mastodon_post_delay_s", 2.0))
+    try:
+        bot_cfg = cfg["bot"]
+        bot = MastodonBot(
+            api_base_url=bot_cfg["mastodon_api_base_url"],
+            access_token=bot_cfg["mastodon_access_token"],
+            request_timeout=request_timeout,
+        )
 
-    bot_cfg = cfg["bot"]
-    bot = MastodonBot(
-        api_base_url=bot_cfg["mastodon_api_base_url"],
-        access_token=bot_cfg["mastodon_access_token"],
-        request_timeout=request_timeout,
-    )
+        kudos_machine = KudosMachine(
+            bot=bot,
+            custom_template=bot_cfg.get("kudosCustom") or None,
+            post_delay_s=mastodon_post_delay_s,
+        )
 
-    kudos_machine = KudosMachine(
-        bot=bot,
-        custom_template=bot_cfg.get("kudosCustom") or None,
-        post_delay_s=mastodon_post_delay_s,
-    )
+        caldav_pusher = _build_caldav_pusher(cfg, timeout=request_timeout)
 
-    caldav_pusher = _build_caldav_pusher(cfg, timeout=request_timeout)
+        users = cfg.get("users", [])
+        if not users:
+            logger.warning("No users found in configuration.")
 
-    users = cfg.get("users", [])
-    if not users:
-        logger.warning("No users found in configuration.")
-
-    for user_cfg in users:
-        source = user_cfg.get("source", "garmin").lower()
-        try:
-            if source == "wahoo":
-                missing = [
-                    k for k in ("wahoo_client_id", "wahoo_client_secret", "wahoo_refresh_token")
-                    if not user_cfg.get(k)
-                ]
-                if missing:
-                    logger.error(
-                        "User %s has source='wahoo' but is missing: %s",
-                        user_cfg.get("name"), ", ".join(missing),
+        for user_cfg in users:
+            source = user_cfg.get("source", "garmin").lower()
+            try:
+                if source == "wahoo":
+                    missing = [
+                        k for k in ("wahoo_client_id", "wahoo_client_secret", "wahoo_refresh_token")
+                        if not user_cfg.get(k)
+                    ]
+                    if missing:
+                        logger.error(
+                            "User %s has source='wahoo' but is missing: %s",
+                            user_cfg.get("name"), ", ".join(missing),
+                        )
+                        continue
+                    process_user_wahoo(
+                        user_cfg, store, bot, caldav_pusher, lookback_days,
+                        request_timeout, fit_max_age_days, mastodon_max_age_days,
+                        mastodon_post_delay_s, kudos_machine,
                     )
-                    continue
-                process_user_wahoo(
-                    user_cfg, store, bot, caldav_pusher, lookback_days,
-                    request_timeout, fit_max_age_days, mastodon_max_age_days,
-                    mastodon_post_delay_s, kudos_machine,
-                )
-            elif source == "both":
-                # Validate both credential sets
-                wahoo_missing = [
-                    k for k in ("wahoo_client_id", "wahoo_client_secret", "wahoo_refresh_token")
-                    if not user_cfg.get(k)
-                ]
-                garmin_missing = [
-                    k for k in ("garmin_username", "garmin_password")
-                    if not user_cfg.get(k)
-                ]
-                if wahoo_missing or garmin_missing:
-                    logger.error(
-                        "User %s has source='both' but is missing credentials: %s",
-                        user_cfg.get("name"),
-                        ", ".join(wahoo_missing + garmin_missing),
+                elif source in ("both", "both_garmin_target"):
+                    # Validate both credential sets
+                    wahoo_missing = [
+                        k for k in ("wahoo_client_id", "wahoo_client_secret", "wahoo_refresh_token")
+                        if not user_cfg.get(k)
+                    ]
+                    garmin_missing = [
+                        k for k in ("garmin_username", "garmin_password")
+                        if not user_cfg.get(k)
+                    ]
+                    if wahoo_missing or garmin_missing:
+                        logger.error(
+                            "User %s has source='%s' but is missing credentials: %s",
+                            user_cfg.get("name"), source,
+                            ", ".join(wahoo_missing + garmin_missing),
+                        )
+                        continue
+                    # Wahoo runs first so its activities are in the DB before
+                    # Garmin dedup checks run. Activities are tagged [Wahoo] /
+                    # [Garmin] to make the source visible in Mastodon posts.
+                    # Garmin skips any activity whose start time matches a
+                    # Wahoo entry already in the DB (cross-source dedup).
+                    # Each side is isolated — a Wahoo failure must not prevent
+                    # the Garmin sync from running.
+                    #
+                    # both_garmin_target: force wahoo_sync_to_garmin so Wahoo
+                    # activities are automatically uploaded to Garmin Connect.
+                    wahoo_cfg = user_cfg
+                    if source == "both_garmin_target":
+                        wahoo_cfg = {**user_cfg, "wahoo_sync_to_garmin": True}
+                    try:
+                        process_user_wahoo(
+                            wahoo_cfg, store, bot, caldav_pusher, lookback_days,
+                            request_timeout, fit_max_age_days, mastodon_max_age_days,
+                            mastodon_post_delay_s, kudos_machine,
+                        )
+                    except Exception as exc:
+                        logger.error("[%s] Wahoo sync failed, continuing with Garmin: %s",
+                                     user_cfg.get("name"), exc)
+                    process_user(
+                        user_cfg, store, bot, caldav_pusher, lookback_days,
+                        request_timeout, gpx_max_age_days, fit_max_age_days,
+                        mastodon_max_age_days, mastodon_post_delay_s, kudos_machine,
+                        tag_source=True, dedup_with_wahoo=True, skip_kudos=True,
                     )
-                    continue
-                # Wahoo runs first so its activities are in the DB before
-                # Garmin dedup checks run. Activities are tagged [Wahoo] /
-                # [Garmin] to make the source visible in Mastodon posts.
-                # Garmin skips any activity whose start time matches a
-                # Wahoo entry already in the DB (cross-source dedup).
-                process_user_wahoo(
-                    user_cfg, store, bot, caldav_pusher, lookback_days,
-                    request_timeout, fit_max_age_days, mastodon_max_age_days,
-                    mastodon_post_delay_s, kudos_machine,
-                )
-                process_user(
-                    user_cfg, store, bot, caldav_pusher, lookback_days,
-                    request_timeout, gpx_max_age_days, fit_max_age_days,
-                    mastodon_max_age_days, mastodon_post_delay_s, kudos_machine,
-                    tag_source=True, dedup_with_wahoo=True,
-                )
-            else:
-                process_user(
-                    user_cfg, store, bot, caldav_pusher, lookback_days,
-                    request_timeout, gpx_max_age_days, fit_max_age_days,
-                    mastodon_max_age_days, mastodon_post_delay_s, kudos_machine,
-                )
-        except Exception as exc:
-            logger.error("Unhandled error for user %s: %s", user_cfg.get("name"), exc)
-
-    store.close()
-    fcntl.flock(lock_fd, fcntl.LOCK_UN)
-    os.close(lock_fd)
+                else:
+                    process_user(
+                        user_cfg, store, bot, caldav_pusher, lookback_days,
+                        request_timeout, gpx_max_age_days, fit_max_age_days,
+                        mastodon_max_age_days, mastodon_post_delay_s, kudos_machine,
+                    )
+            except Exception as exc:
+                logger.error("Unhandled error for user %s: %s", user_cfg.get("name"), exc)
+    finally:
+        store.close()
 
 
 if __name__ == "__main__":

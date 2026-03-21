@@ -215,8 +215,9 @@ class ActivityStore:
         # not yet writable (e.g. first-run before ownership is fixed).
         try:
             self._conn.execute("PRAGMA journal_mode=WAL")
+            self._conn.execute("PRAGMA foreign_keys=ON")
         except sqlite3.OperationalError as exc:
-            logger.warning("Could not enable WAL mode: %s", exc)
+            logger.warning("Could not enable WAL/foreign_keys: %s", exc)
         self._conn.executescript(_DDL)
         self._migrate()
         self._conn.commit()
@@ -237,6 +238,11 @@ class ActivityStore:
                 logger.info("Migration: added %s column to activities.", col)
             except sqlite3.OperationalError:
                 pass  # Column already exists
+        # Backfill source for activities imported before the column existed
+        self._conn.execute(
+            "UPDATE activities SET source = 'GarminNoStra' WHERE source IS NULL"
+        )
+        self._conn.commit()
 
     # ── Users ────────────────────────────────────────────────────────────────
 
@@ -315,8 +321,8 @@ class ActivityStore:
         *name_prefix* (e.g. "[Garmin] ") is prepended to activity_name when set.
         """
         row = _map_activity(user_id, raw_activity)
-        if name_prefix and row.get("activity_name"):
-            row["activity_name"] = name_prefix + row["activity_name"]
+        if name_prefix:
+            row["activity_name"] = name_prefix + (row.get("activity_name") or "Activity")
         if gpx_path:
             row["gpx_path"] = str(gpx_path)
         if fit_path:

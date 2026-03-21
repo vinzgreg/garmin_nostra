@@ -73,7 +73,9 @@ class WahooClient:
             "expires_at": self._token_expires_at,
         }
         try:
-            self._token_path.write_text(json.dumps(data))
+            tmp = self._token_path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(data))
+            tmp.rename(self._token_path)  # atomic on POSIX
             logger.debug("Saved Wahoo tokens to %s.", self._token_path)
         except OSError as exc:
             logger.warning("Could not save Wahoo tokens to %s: %s", self._token_path, exc)
@@ -106,6 +108,10 @@ class WahooClient:
             )
 
         token_data = resp.json()
+        if "access_token" not in token_data:
+            raise WahooAuthError(
+                f"Wahoo token response missing 'access_token': {list(token_data.keys())}"
+            )
         self._access_token = token_data["access_token"]
         self._refresh_token = token_data.get("refresh_token", self._refresh_token)
         self._token_expires_at = time.time() + token_data.get("expires_in", 7200)
@@ -139,7 +145,7 @@ class WahooClient:
         session = self._get_session()
 
         # Wahoo API requires updated_after for the workouts endpoint
-        updated_after = since.strftime("%Y-%m-%dT%H:%M:%S")
+        updated_after = since.strftime("%Y-%m-%dT%H:%M:%SZ")
 
         def _paginate() -> list[dict[str, Any]]:
             result: list[dict[str, Any]] = []
@@ -206,7 +212,8 @@ class WahooClient:
                 timeout=self._timeout,
             )
             resp.raise_for_status()
-            return resp.json().get("workout_summary", resp.json())
+            data = resp.json()
+            return data.get("workout_summary", data)
 
         ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         future = ex.submit(_fetch)
@@ -289,8 +296,7 @@ def _safe_float(value: Any) -> float | None:
     if value is None:
         return None
     try:
-        result = float(value)
-        return result if result != 0.0 else None
+        return float(value)
     except (ValueError, TypeError):
         return None
 

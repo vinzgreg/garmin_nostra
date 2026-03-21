@@ -123,6 +123,7 @@ caldav_enabled   = false
 # DB and Mastodon posts. If an activity from Wahoo was auto-synced to Garmin
 # (outside garmin-nostra), the Garmin copy is skipped automatically based on
 # matching start time (±2 min window). Nothing is posted or stored twice.
+# No cross-platform upload happens — each activity stays on its source.
 # [[users]]
 # name                  = "dave"
 # source                = "both"
@@ -132,4 +133,20 @@ caldav_enabled   = false
 # garmin_username       = "dave@example.com"
 # garmin_password       = "your_garmin_password_here"
 # mastodon_handle       = "@dave@mastodon.social"
+# caldav_enabled        = false
+
+# ── source = "both_garmin_target" — fetch from both, push Wahoo → Garmin ────
+# Like "both", but Wahoo activities are automatically uploaded to Garmin
+# Connect as FIT files (wahoo_sync_to_garmin is implied). Use this when
+# Garmin Connect is the primary archive and Wahoo is a secondary source.
+# Garmin-native activities are NOT pushed anywhere — they already live there.
+# [[users]]
+# name                  = "eve"
+# source                = "both_garmin_target"
+# wahoo_client_id       = "your_client_id_here"
+# wahoo_client_secret   = "your_client_secret_here"
+# wahoo_refresh_token   = "your_refresh_token_here"
+# garmin_username       = "eve@example.com"
+# garmin_password       = "your_garmin_password_here"
+# mastodon_handle       = "@eve@mastodon.social"
 # caldav_enabled        = false

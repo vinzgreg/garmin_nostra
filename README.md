@@ -170,6 +170,7 @@ mastodon_handle = "@alice@mastodon.social"
 
 Syncs from both platforms in a single user block. Wahoo is processed first.
 Activities are tagged `[Wahoo]` or `[Garmin]` in the database and Mastodon posts.
+No cross-platform upload happens — each activity stays on its original source.
 
 If a Wahoo workout was auto-synced to Garmin (e.g. via the native Wahoo→Garmin integration), garmin-nostra detects the duplicate by matching start times (±2 minute window) and skips the Garmin copy. Nothing is posted or stored twice.
 
@@ -185,6 +186,24 @@ garmin_password     = "your_garmin_password_here"
 mastodon_handle     = "@dave@mastodon.social"
 ```
 
+#### `source = "both_garmin_target"` — both sources, Wahoo pushed to Garmin
+
+Like `"both"`, but Wahoo activities are automatically uploaded to Garmin Connect as FIT files (`wahoo_sync_to_garmin` is implied). Use this when Garmin Connect is the primary archive and Wahoo is a secondary source. Garmin-native activities already live on Garmin and are not pushed anywhere.
+
+Duplicate detection applies: if Wahoo already auto-synced an activity to Garmin natively, the upload is skipped.
+
+```toml
+[[users]]
+name                = "eve"
+source              = "both_garmin_target"
+wahoo_client_id     = "your_client_id_here"
+wahoo_client_secret = "your_client_secret_here"
+wahoo_refresh_token = "your_refresh_token_here"
+garmin_username     = "eve@example.com"
+garmin_password     = "your_garmin_password_here"
+mastodon_handle     = "@eve@mastodon.social"
+```
+
 ### 4. Optional: sync Wahoo activities to Garmin Connect
 
 Only relevant for `source = "wahoo"`. To upload Wahoo activities to Garmin Connect automatically, add Garmin credentials to the same user block:
@@ -197,7 +216,7 @@ garmin_password      = "env:CAROL_GARMIN_PASSWORD"
 
 Activities are uploaded as FIT files. If Wahoo has already synced the same activity to Garmin natively, the duplicate is detected and skipped.
 
-> **Note:** Do not combine `wahoo_sync_to_garmin = true` with `source = "both"` — in "both" mode each platform is fetched independently, so uploading in one direction would create duplicates.
+> **Note:** For `source = "both"`, use `source = "both_garmin_target"` instead of setting `wahoo_sync_to_garmin` manually — it handles dedup correctly.
 
 ---
 
@@ -350,7 +369,7 @@ One block per account (Garmin or Wahoo):
 | Key | Required | Description |
 |---|---|---|
 | `name` | ✓ | Unique identifier used for file/token paths |
-| `source` | `"garmin"` | `"garmin"` (default), `"wahoo"`, or `"both"` — selects the activity source. `"both"` fetches from Wahoo and Garmin, deduplicating by start time |
+| `source` | `"garmin"` | `"garmin"` (default), `"wahoo"`, `"both"`, or `"both_garmin_target"` — see [source modes](#3-configure-the-user) |
 | `garmin_username` | Garmin/sync | Garmin Connect e-mail (required for `source = "garmin"` or `wahoo_sync_to_garmin`) |
 | `garmin_password` | Garmin/sync | Garmin Connect password |
 | `wahoo_client_id` | Wahoo | Wahoo developer app client ID |
