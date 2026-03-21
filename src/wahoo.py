@@ -114,6 +114,7 @@ class WahooClient:
 
     def _ensure_auth(self) -> None:
         """Ensure we have a valid access token, refreshing if needed."""
+        logger.debug("Token valid: %s, expires_at: %s", self._token_is_valid(), self._token_expires_at)
         if not self._token_is_valid():
             self._refresh_access_token()
 
@@ -163,6 +164,8 @@ class WahooClient:
                         params=params,
                         timeout=self._timeout,
                     )
+                if not resp.ok:
+                    logger.error("Wahoo API error %s: %s", resp.status_code, resp.text)
                 resp.raise_for_status()
 
                 data = resp.json()
