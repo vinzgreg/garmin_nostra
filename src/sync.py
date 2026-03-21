@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import fcntl
+import fnmatch
 import logging
 import os
 import socket
@@ -255,6 +256,16 @@ def process_user(
                 and act_time is not None
                 and act_time < datetime.now(timezone.utc) - timedelta(days=mastodon_max_age_days)
             )
+            suppress_patterns = [p.lower() for p in user_cfg.get("mastodon_suppress_types", [])]
+            act_type = (activity_row.get("activity_type") or "").lower()
+            if suppress_patterns and any(fnmatch.fnmatch(act_type, p) for p in suppress_patterns):
+                if not activity_row.get("mastodon_posted"):
+                    logger.info(
+                        "[%s] Mastodon-Post unterdrückt für Aktivitätstyp '%s' (%s).",
+                        name, act_type, garmin_id,
+                    )
+                    store.mark_mastodon_posted(user_id, garmin_id, status_id=None)
+                skip_mastodon = True
             if handle and not activity_row.get("mastodon_posted") and not skip_mastodon:
                 logger.debug("[%s] Posting Mastodon for %s", name, garmin_id)
                 try:

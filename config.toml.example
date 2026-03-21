@@ -65,6 +65,9 @@ garmin_password  = "garmin_password_alice"
 mastodon_handle  = "@alice@fosstodon.org"
 caldav_enabled   = true
 # suppressKudos  = true   # uncomment to opt out of kudos replies
+# Suppress Mastodon posts for matching activity types (glob patterns, case-insensitive).
+# Wildcards: * matches any sequence of characters, ? matches one character.
+# mastodon_suppress_types = ["*pilates*", "*strength*", "yoga"]
 
 [[users]]
 name             = "bob"
@@ -73,3 +76,4 @@ garmin_password  = "garmin_password_bob"
 mastodon_handle  = "@bob@mastodon.social"
 caldav_enabled   = false
 # suppressKudos  = true   # uncomment to opt out of kudos replies
+# mastodon_suppress_types = ["*pilates*", "*strength*", "yoga"]
