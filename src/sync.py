@@ -577,6 +577,14 @@ def _run_inner(config_path: str) -> None:
         token_dir=storage_cfg.get("token_dir", "/data/tokens"),
     )
 
+    sync_cfg        = cfg.get("sync", {})
+    lookback_days   = sync_cfg.get("lookback_days", 30)
+    request_timeout = sync_cfg.get("request_timeout_s", 30)
+    gpx_max_age_days        = sync_cfg.get("gpx_max_age_days", None)
+    fit_max_age_days        = sync_cfg.get("fit_max_age_days", None)
+    mastodon_max_age_days   = sync_cfg.get("mastodon_max_age_days", None)
+    mastodon_post_delay_s   = float(sync_cfg.get("mastodon_post_delay_s", 2.0))
+
     try:
         bot_cfg = cfg["bot"]
         bot = MastodonBot(
