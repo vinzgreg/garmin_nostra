@@ -56,9 +56,9 @@ class MastodonBot:
                         description="Streckenkarte der Aktivität",
                     )
                 media_ids.append(media["id"])
-                logger.debug("Kartenbild hochgeladen: %s", map_image_path)
+                logger.debug("Map image uploaded: %s", map_image_path)
             except Exception as exc:
-                logger.warning("Kartenbild-Upload fehlgeschlagen: %s", exc)
+                logger.warning("Map image upload failed: %s", exc)
 
         response = self._client.status_post(
             text,

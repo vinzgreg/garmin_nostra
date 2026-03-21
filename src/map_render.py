@@ -75,8 +75,8 @@ def render_map(gpx_data: bytes, output_path: Path, timeout: int = 30) -> Path | 
         _add_osm_attribution(image)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         image.save(str(output_path), "PNG")
-        logger.info("Karte gespeichert: %s", output_path)
+        logger.info("Map saved: %s", output_path)
         return output_path
     except Exception as exc:
-        logger.warning("Kartendarstellung fehlgeschlagen: %s", exc)
+        logger.warning("Map rendering failed: %s", exc)
         return None

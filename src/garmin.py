@@ -149,6 +149,24 @@ class GarminClient:
         finally:
             ex.shutdown(wait=False)
 
+    def upload_fit(self, fit_data: bytes, timeout: int = 60) -> None:
+        """Upload a FIT file to Garmin Connect with a hard *timeout* in seconds."""
+        import concurrent.futures
+
+        client = self._client_()
+
+        def _upload() -> None:
+            client.upload_activity(fit_data)
+
+        ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        future = ex.submit(_upload)
+        try:
+            future.result(timeout=timeout)
+        except concurrent.futures.TimeoutError:
+            raise TimeoutError(f"FIT upload timed out after {timeout}s")
+        finally:
+            ex.shutdown(wait=False)
+
     def get_fit(self, activity_id: int | str, timeout: int = 30) -> bytes:
         """Download original FIT bytes for *activity_id* with a hard *timeout* in seconds.
 

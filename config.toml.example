@@ -56,10 +56,22 @@ token_dir = "/data/tokens"
 # log_file  = "/data/garmin_nostra.log"
 
 # ── Users ───────────────────────────────────────────────────────────────────
-# Add one [[users]] block per Garmin Connect account.
+# Add one [[users]] block per account.
+#
+# source = "garmin" (default) or "wahoo".
+# Garmin users need garmin_username + garmin_password.
+# Wahoo users need wahoo_client_id + wahoo_client_secret + wahoo_refresh_token.
+#   Register a Wahoo developer app at https://developers.wahooligan.com/cloud
+#   and run  python3 src/wahoo_auth.py <client_id> <client_secret>  to obtain
+#   the refresh token.
+#
+# Wahoo users can optionally sync their activities to Garmin Connect by
+# setting wahoo_sync_to_garmin = true and providing garmin_username +
+# garmin_password in the same block.
 
 [[users]]
 name             = "alice"
+# source         = "garmin"   # default — can be omitted
 garmin_username  = "alice@example.com"
 garmin_password  = "garmin_password_alice"
 mastodon_handle  = "@alice@fosstodon.org"
@@ -77,3 +89,16 @@ mastodon_handle  = "@bob@mastodon.social"
 caldav_enabled   = false
 # suppressKudos  = true   # uncomment to opt out of kudos replies
 # mastodon_suppress_types = ["*pilates*", "*strength*", "yoga"]
+
+# Example: Wahoo user with optional sync to Garmin Connect
+# [[users]]
+# name                  = "carol"
+# source                = "wahoo"
+# wahoo_client_id       = "env:CAROL_WAHOO_CLIENT_ID"
+# wahoo_client_secret   = "env:CAROL_WAHOO_CLIENT_SECRET"
+# wahoo_refresh_token   = "env:CAROL_WAHOO_REFRESH_TOKEN"
+# mastodon_handle       = "@carol@mastodon.social"
+# caldav_enabled        = false
+# wahoo_sync_to_garmin  = true       # upload Wahoo activities to Garmin Connect
+# garmin_username       = "carol@example.com"   # required if wahoo_sync_to_garmin = true
+# garmin_password       = "env:CAROL_GARMIN_PASSWORD"

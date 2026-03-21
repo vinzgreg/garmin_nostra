@@ -1,6 +1,6 @@
 # garmin-nostra
 
-Dockerised Python service that automatically syncs Garmin Connect activities for multiple users.
+Dockerised Python service that automatically syncs **Garmin Connect** and/or **Wahoo** activities for multiple users.
 
 For each new activity it:
 - stores all metrics in a local SQLite database
@@ -17,7 +17,8 @@ Messages and calendar entries are formatted in **German** with metric units.
 
 | Feature | Details |
 |---|---|
-| Multi-user | One `[[users]]` block per Garmin account |
+| Multi-user | One `[[users]]` block per account (Garmin or Wahoo) |
+| Wahoo support | Sync from Wahoo Cloud API; optionally upload activities to Garmin Connect |
 | Mastodon post | Bot mentions the user; visibility is `public` or `unlisted` per user |
 | Activity stats | Duration, distance, pace/speed, elevation, power, heart rate |
 | Map image | GPX track rendered as PNG, attached to the DM |
@@ -236,13 +237,18 @@ Remove this section to disable CalDAV globally. Individual users also need `cald
 
 ### `[[users]]`
 
-One block per Garmin Connect account:
+One block per account (Garmin or Wahoo):
 
 | Key | Required | Description |
 |---|---|---|
 | `name` | ✓ | Unique identifier used for file/token paths |
-| `garmin_username` | ✓ | Garmin Connect e-mail |
-| `garmin_password` | ✓ | Garmin Connect password |
+| `source` | `"garmin"` | `"garmin"` (default) or `"wahoo"` — selects the activity source |
+| `garmin_username` | Garmin/sync | Garmin Connect e-mail (required for `source = "garmin"` or `wahoo_sync_to_garmin`) |
+| `garmin_password` | Garmin/sync | Garmin Connect password |
+| `wahoo_client_id` | Wahoo | Wahoo developer app client ID |
+| `wahoo_client_secret` | Wahoo | Wahoo developer app client secret |
+| `wahoo_refresh_token` | Wahoo | OAuth refresh token (obtained via `wahoo_auth.py`) |
+| `wahoo_sync_to_garmin` | `false` | Upload Wahoo activities to Garmin Connect (requires Garmin credentials) |
 | `mastodon_handle` | — | `@user@instance` — the bot will mention this handle |
 | `mastodon_public` | `false` | `true` = public post, `false` = unlisted (boostable but not on public timeline) |
 | `caldav_enabled` | `false` | Set `true` to push CalDAV events for this user |
@@ -374,6 +380,8 @@ ORDER BY a.start_time_utc;
 |---|---|
 | `src/sync.py` | Main entry point; iterates users, orchestrates pipeline |
 | `src/garmin.py` | Garmin Connect client with per-user token caching |
+| `src/wahoo.py` | Wahoo Cloud API client with OAuth 2.0 token refresh |
+| `src/wahoo_auth.py` | One-time OAuth bootstrap helper to obtain Wahoo refresh tokens |
 | `src/storage.py` | SQLite store — users, activities, kudos deduplication, sync audit log |
 | `src/format.py` | German formatting: dates, numbers, pace, message builder |
 | `src/map_render.py` | GPX → PNG via `staticmap` (OSM tiles) |
@@ -387,14 +395,15 @@ ORDER BY a.start_time_utc;
 
 - Docker & Docker Compose
 - A Mastodon bot account with `read:statuses write:statuses write:media` scopes
-- Garmin Connect credentials per user
+- Garmin Connect credentials per Garmin user
+- *(optional)* Wahoo developer app credentials per Wahoo user (register at [developers.wahooligan.com](https://developers.wahooligan.com/cloud))
 - *(optional)* A Nextcloud CalDAV calendar
 
 Python dependencies (installed inside the container):
 
 ```
 garminconnect  caldav  icalendar  Mastodon.py
-gpxpy  staticmap  Pillow
+gpxpy  staticmap  Pillow  requests
 ```
 
 ---
@@ -426,6 +435,20 @@ The `staticmap` library fetches tiles from `tile.openstreetmap.org`. Make sure t
 
 **Mastodon post not visible**
 For `unlisted` posts, the post appears in the mentioned user's notifications and on the bot's profile, but not on the public timeline. To make posts appear publicly, set `mastodon_public = true` for that user. On some instances, mentions from unfollowed accounts land in filtered notifications.
+
+**Wahoo authentication fails**
+Run the OAuth bootstrap helper to obtain a fresh refresh token:
+
+```bash
+docker exec -it garmin-nostra python3 /app/src/wahoo_auth.py <client_id> <client_secret>
+```
+
+Open the printed URL in your browser, authorise the app, and paste the code back. The script prints the `refresh_token` to store in `config.toml` (or as an environment variable).
+
+Wahoo refresh tokens expire after 60 days of inactivity. If sync stops working for a Wahoo user, re-run the bootstrap.
+
+**Wahoo activities have no map image**
+Wahoo does not provide GPX files. Map rendering is currently only available for Garmin activities. FIT files are downloaded and stored.
 
 **CalDAV calendar not found**
 The calendar must already exist in Nextcloud. The error message lists available calendar names.
@@ -502,3 +525,33 @@ environment:
 ```
 
 This avoids storing secrets in the config file and works with Docker secrets, `.env` files, or CI/CD variable injection.
+
+### Wahoo support (March 2026)
+
+Users can now sync activities from Wahoo instead of (or in addition to) Garmin Connect. This is **opt-in** — existing Garmin-only configurations work unchanged without any modifications.
+
+To add a Wahoo user:
+
+1. Register a developer app at [developers.wahooligan.com](https://developers.wahooligan.com/cloud) to get a `client_id` and `client_secret`.
+2. Run the OAuth bootstrap to get a refresh token:
+   ```bash
+   python3 src/wahoo_auth.py <client_id> <client_secret>
+   ```
+3. Add a `[[users]]` block with `source = "wahoo"`:
+   ```toml
+   [[users]]
+   name                = "carol"
+   source              = "wahoo"
+   wahoo_client_id     = "env:CAROL_WAHOO_CLIENT_ID"
+   wahoo_client_secret = "env:CAROL_WAHOO_CLIENT_SECRET"
+   wahoo_refresh_token = "env:CAROL_WAHOO_REFRESH_TOKEN"
+   mastodon_handle     = "@carol@mastodon.social"
+   ```
+4. To also upload Wahoo activities to Garmin Connect, add:
+   ```toml
+   wahoo_sync_to_garmin = true
+   garmin_username      = "carol@example.com"
+   garmin_password      = "env:CAROL_GARMIN_PASSWORD"
+   ```
+
+The database schema is extended automatically (two new columns added on first run). No manual migration needed.

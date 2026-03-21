@@ -94,12 +94,12 @@ class CalDAVPusher:
         for cal in calendars:
             if cal.name == self._calendar_name:
                 self._calendar = cal
-                logger.info("CalDAV-Kalender gefunden: %s", self._calendar_name)
+                logger.info("CalDAV calendar found: %s", self._calendar_name)
                 return self._calendar
         available = [c.name for c in calendars]
         raise ValueError(
-            f"Kalender '{self._calendar_name}' nicht gefunden. "
-            f"Verfügbar: {available}"
+            f"Calendar '{self._calendar_name}' not found. "
+            f"Available: {available}"
         )
 
     def push(self, activity: dict[str, Any]) -> None:
@@ -109,7 +109,7 @@ class CalDAVPusher:
         next call will reconnect instead of failing repeatedly.
         """
         gid = activity.get("garmin_activity_id", "unknown")
-        logger.info("Sende Aktivität %s an CalDAV …", gid)
+        logger.info("Pushing activity %s to CalDAV …", gid)
         ical_bytes = _build_vevent(activity)
         try:
             self._get_calendar().save_event(ical_bytes.decode())
@@ -117,7 +117,7 @@ class CalDAVPusher:
             self._calendar = None
             logger.warning("CalDAV connection lost, will reconnect on next push: %s", exc)
             raise
-        logger.info("CalDAV-Eintrag gespeichert für Aktivität %s.", gid)
+        logger.info("CalDAV event saved for activity %s.", gid)
 
 
 # ── Standalone test ──────────────────────────────────────────────────────────

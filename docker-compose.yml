@@ -14,3 +14,13 @@ services:
       # Uncomment and fill in as needed:
       # - MASTODON_TOKEN=your_token_here
       # - CALDAV_PASSWORD=your_password_here
+      # Wahoo credentials — one set of env vars per Wahoo user.
+      # Each [[users]] block in config.toml references its own vars, e.g.:
+      #   wahoo_client_id   = "env:CAROL_WAHOO_CLIENT_ID"
+      #   wahoo_refresh_token = "env:CAROL_WAHOO_REFRESH_TOKEN"
+      # - CAROL_WAHOO_CLIENT_ID=your_client_id
+      # - CAROL_WAHOO_CLIENT_SECRET=your_client_secret
+      # - CAROL_WAHOO_REFRESH_TOKEN=your_refresh_token
+      # - DAVE_WAHOO_CLIENT_ID=your_client_id
+      # - DAVE_WAHOO_CLIENT_SECRET=your_client_secret
+      # - DAVE_WAHOO_REFRESH_TOKEN=your_refresh_token

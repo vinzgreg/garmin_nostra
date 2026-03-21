@@ -18,6 +18,7 @@ except ImportError:
     import tomli as tomllib  # type: ignore[no-reattr]
 
 from garmin import GarminClient
+from wahoo import WahooClient, map_wahoo_activity
 from storage import ActivityStore
 from caldav_push import CalDAVPusher
 from mastodon_bot import MastodonBot
@@ -230,11 +231,11 @@ def process_user(
 
                 logger.debug("[%s] Saving activity %s to DB", name, garmin_id)
                 activity_row = store.save_activity(user_id, act, gpx_path, fit_path)
-                logger.info("[%s] Neue Aktivität gespeichert: %s", name, garmin_id)
+                logger.info("[%s] New activity saved: %s", name, garmin_id)
             else:
                 # ── Known activity — check if any integration needs retry ───
                 activity_row = existing
-                logger.debug("[%s] Aktivität %s bereits bekannt.", name, garmin_id)
+                logger.debug("[%s] Activity %s already known.", name, garmin_id)
                 map_path = store.map_path(name, garmin_id)
                 # Only retry if not yet done
                 if existing["caldav_pushed"] and existing["mastodon_posted"]:
@@ -246,9 +247,9 @@ def process_user(
                 try:
                     caldav_pusher.push(activity_row)
                     store.mark_caldav_pushed(user_id, garmin_id)
-                    logger.info("[%s] CalDAV-Eintrag erstellt: %s", name, garmin_id)
+                    logger.info("[%s] CalDAV event created: %s", name, garmin_id)
                 except Exception as exc:
-                    logger.error("[%s] CalDAV fehlgeschlagen für %s: %s", name, garmin_id, exc)
+                    logger.error("[%s] CalDAV push failed for %s: %s", name, garmin_id, exc)
 
             # ── Mastodon DM ────────────────────────────────────────────────
             skip_mastodon = (
@@ -261,7 +262,7 @@ def process_user(
             if suppress_patterns and any(fnmatch.fnmatch(act_type, p) for p in suppress_patterns):
                 if not activity_row.get("mastodon_posted"):
                     logger.info(
-                        "[%s] Mastodon-Post unterdrückt für Aktivitätstyp '%s' (%s).",
+                        "[%s] Mastodon post suppressed for activity type '%s' (%s).",
                         name, act_type, garmin_id,
                     )
                     store.mark_mastodon_posted(user_id, garmin_id, status_id=None)
@@ -275,17 +276,17 @@ def process_user(
                     if mastodon_post_delay_s > 0:
                         time.sleep(mastodon_post_delay_s)
                 except Exception as exc:
-                    logger.error("[%s] Mastodon fehlgeschlagen für %s: %s", name, garmin_id, exc)
+                    logger.error("[%s] Mastodon post failed for %s: %s", name, garmin_id, exc)
             logger.debug("[%s] Activity %s done", name, garmin_id)
 
             processed += 1
 
         store.finish_sync_run(run_id, found, processed, "success")
-        logger.info("[%s] Sync abgeschlossen. %d gefunden / %d verarbeitet.", name, found, processed)
+        logger.info("[%s] Sync complete. %d found / %d processed.", name, found, processed)
 
     except Exception as exc:
         store.finish_sync_run(run_id, found, processed, "failed", str(exc))
-        logger.error("[%s] Sync fehlgeschlagen: %s", name, exc, exc_info=True)
+        logger.error("[%s] Sync failed: %s", name, exc, exc_info=True)
 
     # ── KudosMachine — runs after every invocation, even if Garmin sync failed ─
     if kudos_machine is not None and handle and not user_cfg.get("suppressKudos", False):
@@ -296,7 +297,222 @@ def process_user(
                 public=user_cfg.get("mastodon_public", False),
             )
         except Exception as exc:
-            logger.error("[%s] KudosMachine fehlgeschlagen: %s", name, exc)
+            logger.error("[%s] KudosMachine failed: %s", name, exc)
+
+
+def process_user_wahoo(
+    user_cfg: dict,
+    store: ActivityStore,
+    bot: MastodonBot,
+    caldav_pusher: CalDAVPusher | None,
+    lookback_days: int,
+    request_timeout: int = 30,
+    fit_max_age_days: int | None = None,
+    mastodon_max_age_days: int | None = None,
+    mastodon_post_delay_s: float = 2.0,
+    kudos_machine: KudosMachine | None = None,
+) -> None:
+    """Sync activities from Wahoo Cloud API for a single user."""
+    name   = user_cfg["name"]
+    handle = user_cfg.get("mastodon_handle")
+    caldav_enabled = user_cfg.get("caldav_enabled", False)
+
+    user_id = store.upsert_user(user_cfg)
+
+    # Determine sync window
+    since    = store.get_last_sync_time(user_id)
+    earliest = datetime.now(timezone.utc) - timedelta(days=lookback_days)
+    since    = max(since, earliest)
+    logger.info("[%s] (Wahoo) Syncing workouts since %s.", name, since.isoformat())
+
+    wahoo = WahooClient(
+        client_id=user_cfg["wahoo_client_id"],
+        client_secret=user_cfg["wahoo_client_secret"],
+        refresh_token=user_cfg["wahoo_refresh_token"],
+        token_path=store.token_dir / name / "wahoo_tokens.json",
+        timeout=request_timeout,
+    )
+
+    # Optional: Garmin client for wahoo→garmin sync
+    garmin_for_upload = None
+    if user_cfg.get("wahoo_sync_to_garmin"):
+        if not user_cfg.get("garmin_username") or not user_cfg.get("garmin_password"):
+            logger.warning(
+                "[%s] wahoo_sync_to_garmin is enabled but garmin_username/garmin_password "
+                "is missing — Garmin upload will be skipped.",
+                name,
+            )
+        else:
+            garmin_for_upload = GarminClient(
+                username=user_cfg["garmin_username"],
+                password=user_cfg["garmin_password"],
+                tokenstore=store.token_dir / name,
+                timeout=request_timeout,
+            )
+
+    run_id = store.start_sync_run(user_id)
+    found = processed = 0
+
+    try:
+        workouts = wahoo.get_workouts_since(since, timeout=request_timeout * 4)
+        found = len(workouts)
+
+        # Process oldest-first so last_sync advances monotonically
+        workouts.sort(key=lambda w: w.get("starts") or "")
+
+        for idx, workout in enumerate(workouts, 1):
+            wahoo_id = str(workout["id"])
+            logger.info("[%s] Wahoo workout %d/%d: %s", name, idx, found, wahoo_id)
+
+            existing = store.get_wahoo_activity(user_id, wahoo_id)
+
+            starts_str = workout.get("starts") or ""
+            try:
+                act_time = datetime.fromisoformat(
+                    starts_str.replace("Z", "+00:00")
+                )
+                if act_time.tzinfo is None:
+                    act_time = act_time.replace(tzinfo=timezone.utc)
+            except (ValueError, AttributeError):
+                act_time = None
+
+            # Skip very recent activities — let Wahoo finish processing
+            if existing is None and act_time is not None:
+                age = datetime.now(timezone.utc) - act_time
+                if age < timedelta(minutes=10):
+                    logger.info(
+                        "[%s] Skipping workout %s (only %ds old, waiting for next cycle).",
+                        name, wahoo_id, int(age.total_seconds()),
+                    )
+                    continue
+
+            if existing is None:
+                # ── New workout — fetch summary, download FIT, store ──────
+                try:
+                    summary = wahoo.get_workout_summary(wahoo_id, timeout=request_timeout)
+                except Exception as exc:
+                    logger.error("[%s] Failed to fetch summary for %s: %s", name, wahoo_id, exc)
+                    continue
+
+                activity_row = map_wahoo_activity(user_id, workout, summary)
+
+                fit_path = None
+                fit_data = None
+                skip_fit = (
+                    fit_max_age_days is not None
+                    and act_time is not None
+                    and act_time < datetime.now(timezone.utc) - timedelta(days=fit_max_age_days)
+                )
+
+                if not skip_fit:
+                    try:
+                        fit_data = wahoo.get_fit(wahoo_id, timeout=request_timeout, summary=summary)
+                        if fit_data:
+                            fit_path = store.save_fit(name, wahoo_id, fit_data)
+                    except Exception as exc:
+                        logger.warning("[%s] FIT download failed for %s: %s", name, wahoo_id, exc)
+                        fit_data = None
+
+                map_path = None
+
+                activity_row = store.save_wahoo_activity(user_id, activity_row, fit_path=fit_path)
+                logger.info("[%s] New Wahoo workout saved: %s", name, wahoo_id)
+
+                # ── Wahoo → Garmin sync ───────────────────────────────────
+                if garmin_for_upload and fit_data and not activity_row.get("wahoo_synced_to_garmin"):
+                    try:
+                        garmin_for_upload.upload_fit(fit_data, timeout=request_timeout)
+                        store.mark_wahoo_synced_to_garmin(user_id, wahoo_id)
+                        logger.info("[%s] Wahoo workout %s uploaded to Garmin.", name, wahoo_id)
+                    except Exception as exc:
+                        # Garmin may reject duplicates if Wahoo already synced
+                        # the same activity — log as warning, not error
+                        if "duplicate" in str(exc).lower() or "conflict" in str(exc).lower():
+                            logger.warning("[%s] Garmin upload skipped for %s (likely duplicate): %s", name, wahoo_id, exc)
+                            store.mark_wahoo_synced_to_garmin(user_id, wahoo_id)
+                        else:
+                            logger.error("[%s] Garmin upload failed for %s: %s", name, wahoo_id, exc)
+
+            else:
+                # ── Known activity — check if any integration needs retry ─
+                activity_row = existing
+                logger.debug("[%s] Wahoo workout %s already known.", name, wahoo_id)
+                map_path = None
+                if existing["caldav_pushed"] and existing["mastodon_posted"]:
+                    # Retry wahoo→garmin if still pending
+                    if (
+                        garmin_for_upload
+                        and not existing.get("wahoo_synced_to_garmin")
+                        and existing.get("fit_path")
+                    ):
+                        try:
+                            fit_data = Path(existing["fit_path"]).read_bytes()
+                            garmin_for_upload.upload_fit(fit_data, timeout=request_timeout)
+                            store.mark_wahoo_synced_to_garmin(user_id, wahoo_id)
+                            logger.info("[%s] Wahoo workout %s uploaded to Garmin (retry).", name, wahoo_id)
+                        except Exception as exc:
+                            if "duplicate" in str(exc).lower() or "conflict" in str(exc).lower():
+                                logger.warning("[%s] Garmin upload skipped for %s (likely duplicate): %s", name, wahoo_id, exc)
+                                store.mark_wahoo_synced_to_garmin(user_id, wahoo_id)
+                            else:
+                                logger.error("[%s] Garmin upload retry failed for %s: %s", name, wahoo_id, exc)
+                    continue
+
+            # ── CalDAV (optional) ─────────────────────────────────────────
+            if caldav_enabled and caldav_pusher and not activity_row.get("caldav_pushed"):
+                try:
+                    caldav_pusher.push(activity_row)
+                    store.mark_caldav_pushed(user_id, wahoo_id)
+                    logger.info("[%s] CalDAV event created: %s", name, wahoo_id)
+                except Exception as exc:
+                    logger.error("[%s] CalDAV push failed for %s: %s", name, wahoo_id, exc)
+
+            # ── Mastodon DM ───────────────────────────────────────────────
+            skip_mastodon = (
+                mastodon_max_age_days is not None
+                and act_time is not None
+                and act_time < datetime.now(timezone.utc) - timedelta(days=mastodon_max_age_days)
+            )
+            suppress_patterns = [p.lower() for p in user_cfg.get("mastodon_suppress_types", [])]
+            act_type = (activity_row.get("activity_type") or "").lower()
+            if suppress_patterns and any(fnmatch.fnmatch(act_type, p) for p in suppress_patterns):
+                if not activity_row.get("mastodon_posted"):
+                    logger.info(
+                        "[%s] Mastodon post suppressed for activity type '%s' (%s).",
+                        name, act_type, wahoo_id,
+                    )
+                    store.mark_mastodon_posted(user_id, wahoo_id, status_id=None)
+                skip_mastodon = True
+            if handle and not activity_row.get("mastodon_posted") and not skip_mastodon:
+                try:
+                    status_id = bot.post_activity(handle, activity_row, map_path,
+                                                  public=user_cfg.get("mastodon_public", False))
+                    store.mark_mastodon_posted(user_id, wahoo_id, status_id=status_id)
+                    if mastodon_post_delay_s > 0:
+                        time.sleep(mastodon_post_delay_s)
+                except Exception as exc:
+                    logger.error("[%s] Mastodon post failed for %s: %s", name, wahoo_id, exc)
+
+            processed += 1
+
+        store.finish_sync_run(run_id, found, processed, "success")
+        logger.info("[%s] Wahoo sync complete. %d found / %d processed.", name, found, processed)
+
+    except Exception as exc:
+        store.finish_sync_run(run_id, found, processed, "failed", str(exc))
+        logger.error("[%s] Wahoo sync failed: %s", name, exc, exc_info=True)
+    finally:
+        wahoo.close()
+
+    # ── KudosMachine — runs after every invocation ────────────────────────
+    if kudos_machine is not None and handle and not user_cfg.get("suppressKudos", False):
+        try:
+            kudos_machine.process_user(
+                user_id, handle, store, max_age_days=mastodon_max_age_days,
+                public=user_cfg.get("mastodon_public", False),
+            )
+        except Exception as exc:
+            logger.error("[%s] KudosMachine failed: %s", name, exc)
 
 
 def run(config_path: str) -> None:
@@ -349,13 +565,35 @@ def run(config_path: str) -> None:
 
     users = cfg.get("users", [])
     if not users:
-        logger.warning("Keine Benutzer in der Konfiguration gefunden.")
+        logger.warning("No users found in configuration.")
 
     for user_cfg in users:
+        source = user_cfg.get("source", "garmin").lower()
         try:
-            process_user(user_cfg, store, bot, caldav_pusher, lookback_days, request_timeout, gpx_max_age_days, fit_max_age_days, mastodon_max_age_days, mastodon_post_delay_s, kudos_machine)
+            if source == "wahoo":
+                missing = [
+                    k for k in ("wahoo_client_id", "wahoo_client_secret", "wahoo_refresh_token")
+                    if not user_cfg.get(k)
+                ]
+                if missing:
+                    logger.error(
+                        "User %s has source='wahoo' but is missing: %s",
+                        user_cfg.get("name"), ", ".join(missing),
+                    )
+                    continue
+                process_user_wahoo(
+                    user_cfg, store, bot, caldav_pusher, lookback_days,
+                    request_timeout, fit_max_age_days, mastodon_max_age_days,
+                    mastodon_post_delay_s, kudos_machine,
+                )
+            else:
+                process_user(
+                    user_cfg, store, bot, caldav_pusher, lookback_days,
+                    request_timeout, gpx_max_age_days, fit_max_age_days,
+                    mastodon_max_age_days, mastodon_post_delay_s, kudos_machine,
+                )
         except Exception as exc:
-            logger.error("Unbehandelter Fehler bei Benutzer %s: %s", user_cfg.get("name"), exc)
+            logger.error("Unhandled error for user %s: %s", user_cfg.get("name"), exc)
 
     store.close()
     fcntl.flock(lock_fd, fcntl.LOCK_UN)

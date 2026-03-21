@@ -228,6 +228,8 @@ class ActivityStore:
             ("fit_path", "TEXT"),
             ("source", "TEXT"),
             ("mastodon_status_id", "TEXT"),
+            ("wahoo_activity_id", "TEXT"),
+            ("wahoo_synced_to_garmin", "INTEGER DEFAULT 0"),
         ]:
             try:
                 self._conn.execute(f"ALTER TABLE activities ADD COLUMN {col} {definition}")
@@ -239,7 +241,10 @@ class ActivityStore:
     # ── Users ────────────────────────────────────────────────────────────────
 
     def upsert_user(self, cfg: dict) -> int:
-        """Insert or update user from config block. Returns user_id."""
+        """Insert or update user from config block. Returns user_id.
+
+        garmin_username is optional for Wahoo-only users (stored as empty string).
+        """
         now = datetime.now(timezone.utc).isoformat()
         self._conn.execute(
             """
@@ -252,7 +257,7 @@ class ActivityStore:
             """,
             {
                 "name":            cfg["name"],
-                "garmin_username": cfg["garmin_username"],
+                "garmin_username": cfg.get("garmin_username", ""),
                 "mastodon_handle": cfg.get("mastodon_handle"),
                 "caldav_enabled":  1 if cfg.get("caldav_enabled") else 0,
                 "created_at":      now,
@@ -312,6 +317,50 @@ class ActivityStore:
              WHERE user_id = ? AND garmin_activity_id = ?
             """,
             (status_id, user_id, garmin_activity_id),
+        )
+        self._conn.commit()
+
+    # ── Wahoo activity helpers ───────────────────────────────────────────
+
+    def get_wahoo_activity(self, user_id: int, wahoo_id: str) -> dict | None:
+        """Look up an activity by its Wahoo workout ID.
+
+        Wahoo IDs are stored in garmin_activity_id (the source-neutral ID
+        column) with source='WahooNoStra'.
+        """
+        row = self._conn.execute(
+            "SELECT * FROM activities WHERE user_id = ? AND garmin_activity_id = ? AND source = 'WahooNoStra'",
+            (user_id, wahoo_id),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def save_wahoo_activity(
+        self, user_id: int, mapped_row: dict, gpx_path: Path | None = None, fit_path: Path | None = None
+    ) -> dict:
+        """Insert a Wahoo activity into DB (ignore if already exists).
+
+        *mapped_row* must be the output of wahoo.map_wahoo_activity().
+        """
+        if gpx_path:
+            mapped_row["gpx_path"] = str(gpx_path)
+        if fit_path:
+            mapped_row["fit_path"] = str(fit_path)
+        mapped_row["wahoo_activity_id"] = mapped_row["garmin_activity_id"]
+
+        cols = ", ".join(mapped_row.keys())
+        placeholders = ", ".join(f":{k}" for k in mapped_row.keys())
+        self._conn.execute(
+            f"INSERT OR IGNORE INTO activities ({cols}) VALUES ({placeholders})", mapped_row
+        )
+        self._conn.commit()
+        logger.debug("Wahoo activity %s saved.", mapped_row["garmin_activity_id"])
+        return mapped_row
+
+    def mark_wahoo_synced_to_garmin(self, user_id: int, wahoo_id: str) -> None:
+        """Mark a Wahoo-sourced activity as successfully uploaded to Garmin."""
+        self._conn.execute(
+            "UPDATE activities SET wahoo_synced_to_garmin = 1 WHERE user_id = ? AND garmin_activity_id = ? AND source = 'WahooNoStra'",
+            (user_id, wahoo_id),
         )
         self._conn.commit()
 
