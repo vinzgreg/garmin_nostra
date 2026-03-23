@@ -262,13 +262,19 @@ def process_user(
                     name_prefix="[Garmin] " if tag_source else None,
                 )
                 logger.info("[%s] New activity saved: %s", name, garmin_id)
+                if activity_row.get("suppressed"):
+                    logger.info(
+                        "[%s] Activity %s suppressed (%s), skipping integrations.",
+                        name, garmin_id, activity_row["suppressed"],
+                    )
+                    continue
             else:
                 # ── Known activity — check if any integration needs retry ───
                 activity_row = existing
                 logger.debug("[%s] Activity %s already known.", name, garmin_id)
                 map_path = store.map_path(name, garmin_id)
-                # Only retry if not yet done
-                if existing["caldav_pushed"] and existing["mastodon_posted"]:
+                # Skip suppressed activities and those already fully processed
+                if existing.get("suppressed") or (existing["caldav_pushed"] and existing["mastodon_posted"]):
                     continue
 
             # ── CalDAV (optional) ──────────────────────────────────────────

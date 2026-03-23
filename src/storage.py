@@ -239,6 +239,7 @@ class ActivityStore:
             ("mastodon_status_id", "TEXT"),
             ("wahoo_activity_id", "TEXT"),
             ("wahoo_synced_to_garmin", "INTEGER DEFAULT 0"),
+            ("suppressed", "TEXT"),
         ]:
             try:
                 self._conn.execute(f"ALTER TABLE activities ADD COLUMN {col} {definition}")
@@ -250,6 +251,25 @@ class ActivityStore:
         self._conn.execute(
             "UPDATE activities SET source = 'GarminNoStra' WHERE source IS NULL"
         )
+        # Retroactively suppress Garmin activities that overlap a Wahoo activity
+        # for the same user. Idempotent: only touches rows where suppressed IS NULL.
+        self._conn.execute("""
+            UPDATE activities
+            SET suppressed = 'wahoo_garmin_duplicate'
+            WHERE suppressed IS NULL
+              AND source = 'GarminNoStra'
+              AND EXISTS (
+                SELECT 1 FROM activities w
+                WHERE w.user_id = activities.user_id
+                  AND w.source = 'WahooNoStra'
+                  AND CAST(strftime('%s', w.start_time_utc) AS INTEGER)
+                      < CAST(strftime('%s', activities.start_time_utc) AS INTEGER)
+                        + COALESCE(activities.duration_s, 0)
+                  AND CAST(strftime('%s', w.start_time_utc) AS INTEGER)
+                        + COALESCE(w.duration_s, 0)
+                      > CAST(strftime('%s', activities.start_time_utc) AS INTEGER)
+              )
+        """)
         self._conn.commit()
 
     # ── Users ────────────────────────────────────────────────────────────────
@@ -284,6 +304,51 @@ class ActivityStore:
         return row["id"]
 
     # ── Activity tracking ────────────────────────────────────────────────────
+
+    def _get_overlapping_wahoo(
+        self, user_id: int, start_time_utc: str, duration_s: float
+    ) -> dict | None:
+        """Return a WahooNoStra activity whose time window overlaps [start, start+duration_s]."""
+        row = self._conn.execute(
+            """
+            SELECT * FROM activities
+            WHERE user_id = ?
+              AND source = 'WahooNoStra'
+              AND CAST(strftime('%s', start_time_utc) AS INTEGER)
+                  < CAST(strftime('%s', ?) AS INTEGER) + ?
+              AND CAST(strftime('%s', start_time_utc) AS INTEGER) + COALESCE(duration_s, 0)
+                  > CAST(strftime('%s', ?) AS INTEGER)
+            LIMIT 1
+            """,
+            (user_id, start_time_utc, int(duration_s), start_time_utc),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def _suppress_overlapping_garmin(
+        self, user_id: int, start_time_utc: str, duration_s: float, wahoo_id: str
+    ) -> None:
+        """Mark GarminNoStra activities overlapping [start, start+duration_s] as suppressed."""
+        self._conn.execute(
+            """
+            UPDATE activities
+            SET suppressed = 'wahoo_garmin_duplicate'
+            WHERE user_id = ?
+              AND source = 'GarminNoStra'
+              AND suppressed IS NULL
+              AND CAST(strftime('%s', start_time_utc) AS INTEGER)
+                  < CAST(strftime('%s', ?) AS INTEGER) + ?
+              AND CAST(strftime('%s', start_time_utc) AS INTEGER) + COALESCE(duration_s, 0)
+                  > CAST(strftime('%s', ?) AS INTEGER)
+            """,
+            (user_id, start_time_utc, int(duration_s), start_time_utc),
+        )
+        count = self._conn.execute("SELECT changes()").fetchone()[0]
+        if count:
+            logger.info(
+                "Suppressed %d Garmin activity/activities overlapping Wahoo workout %s.",
+                count, wahoo_id,
+            )
+        self._conn.commit()
 
     def get_activity(self, user_id: int, garmin_activity_id: str) -> dict | None:
         row = self._conn.execute(
@@ -335,6 +400,18 @@ class ActivityStore:
             row["gpx_path"] = str(gpx_path)
         if fit_path:
             row["fit_path"] = str(fit_path)
+
+        # Suppress if a Wahoo activity already covers this time window
+        if row.get("source") == "GarminNoStra" and row.get("start_time_utc"):
+            wahoo_overlap = self._get_overlapping_wahoo(
+                user_id, row["start_time_utc"], row.get("duration_s") or 0
+            )
+            if wahoo_overlap:
+                row["suppressed"] = "wahoo_garmin_duplicate"
+                logger.info(
+                    "Activity %s suppressed (overlaps Wahoo activity %s).",
+                    row["garmin_activity_id"], wahoo_overlap["garmin_activity_id"],
+                )
 
         cols   = ", ".join(row.keys())
         placeholders = ", ".join(f":{k}" for k in row.keys())
@@ -399,6 +476,15 @@ class ActivityStore:
         )
         self._conn.commit()
         logger.debug("Wahoo activity %s saved.", mapped_row["garmin_activity_id"])
+
+        # Suppress any Garmin activities that overlap this Wahoo workout
+        if mapped_row.get("start_time_utc"):
+            self._suppress_overlapping_garmin(
+                user_id, mapped_row["start_time_utc"],
+                mapped_row.get("duration_s") or 0,
+                mapped_row["garmin_activity_id"],
+            )
+
         return mapped_row
 
     def mark_wahoo_synced_to_garmin(self, user_id: int, wahoo_id: str) -> None:
