@@ -152,11 +152,18 @@ class GarminClient:
     def upload_fit(self, fit_data: bytes, timeout: int = 60) -> None:
         """Upload a FIT file to Garmin Connect with a hard *timeout* in seconds."""
         import concurrent.futures
+        import tempfile
 
         client = self._client_()
 
         def _upload() -> None:
-            client.upload_activity(fit_data)
+            with tempfile.NamedTemporaryFile(suffix=".fit", delete=False) as tmp:
+                tmp.write(fit_data)
+                tmp_path = tmp.name
+            try:
+                client.upload_activity(tmp_path)
+            finally:
+                Path(tmp_path).unlink(missing_ok=True)
 
         ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         future = ex.submit(_upload)

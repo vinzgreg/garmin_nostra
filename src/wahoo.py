@@ -207,10 +207,12 @@ class WahooClient:
         session = self._get_session()
 
         def _fetch() -> dict[str, Any]:
-            resp = session.get(
-                f"{_API_BASE}/v1/workouts/{workout_id}/workout_summary",
-                timeout=self._timeout,
-            )
+            url = f"{_API_BASE}/v1/workouts/{workout_id}/workout_summary"
+            resp = session.get(url, timeout=self._timeout)
+            if resp.status_code == 401:
+                self._refresh_access_token()
+                session.headers["Authorization"] = f"Bearer {self._access_token}"
+                resp = session.get(url, timeout=self._timeout)
             resp.raise_for_status()
             data = resp.json()
             return data.get("workout_summary", data)
