@@ -378,6 +378,7 @@ One block per account (Garmin or Wahoo):
 | `wahoo_sync_to_garmin` | `false` | Upload Wahoo activities to Garmin Connect (requires Garmin credentials) |
 | `mastodon_handle` | — | `@user@instance` — the bot will mention this handle |
 | `mastodon_public` | `false` | `true` = public post, `false` = unlisted (boostable but not on public timeline) |
+| `mastodon_suppress_types` | `[]` | List of glob patterns (case-insensitive) to suppress Mastodon posts for matching activity types. Example: `["*pilates*", "*strength*", "yoga"]`. Wildcards: `*` matches any characters, `?` matches one character. Suppressed activities are marked as posted (no retry). |
 | `caldav_enabled` | `false` | Set `true` to push CalDAV events for this user |
 | `suppressKudos` | `false` | Set `true` to opt this user out of kudos replies |
 
@@ -460,6 +461,16 @@ Deduplication log for KudosMachine — one row per (status, fav-giver) pair.
 | `status_id` | TEXT PK | Mastodon status ID of the activity post |
 | `account_id` | TEXT PK | Mastodon account ID of the fav-giver |
 | `sent_at` | TEXT | ISO-8601 UTC timestamp |
+
+### `wahoo_skipped`
+Permanently inaccessible Wahoo workouts (401 Unauthorized). Checked before making API calls so skipped workouts produce no network traffic or log noise on subsequent runs.
+
+| Column | Type | Description |
+|---|---|---|
+| `user_id` | INTEGER PK | FK to `users.id` |
+| `wahoo_id` | TEXT PK | Wahoo workout ID |
+| `reason` | TEXT | Why it was skipped (e.g. `401 Unauthorized`) |
+| `skipped_at` | TEXT | ISO-8601 UTC timestamp |
 
 ### `sync_runs`
 Audit log — one row per sync attempt per user.
