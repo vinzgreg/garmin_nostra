@@ -443,6 +443,7 @@ One row per activity per user. Key columns:
 | `gpx_path` | TEXT | Path to saved GPX file |
 | `fit_path` | TEXT | Path to saved FIT file |
 | `source` | TEXT | Origin of the record: `GarminNoStra` or `WahooNoStra` |
+| `wahoo_synced_to_garmin` | INTEGER | 0/1 — set when a Wahoo activity has been uploaded to Garmin Connect |
 | `caldav_pushed` | INTEGER | 0/1 |
 | `mastodon_posted` | INTEGER | 0/1 |
 
