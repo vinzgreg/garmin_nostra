@@ -148,6 +148,7 @@ class WahooClient:
         updated_after = since.strftime("%Y-%m-%dT%H:%M:%SZ")
 
         def _paginate() -> list[dict[str, Any]]:
+            import time as _time
             result: list[dict[str, Any]] = []
             page = 1
             while True:
@@ -165,6 +166,15 @@ class WahooClient:
                     # Token expired mid-pagination — refresh and retry this page
                     self._refresh_access_token()
                     session.headers["Authorization"] = f"Bearer {self._access_token}"
+                    resp = session.get(
+                        f"{_API_BASE}/v1/workouts",
+                        params=params,
+                        timeout=self._timeout,
+                    )
+                if resp.status_code == 429:
+                    retry_after = int(resp.headers.get("Retry-After", 30))
+                    logger.warning("Wahoo rate-limited (429) on workout list, waiting %ds.", retry_after)
+                    _time.sleep(retry_after)
                     resp = session.get(
                         f"{_API_BASE}/v1/workouts",
                         params=params,
@@ -207,11 +217,23 @@ class WahooClient:
         session = self._get_session()
 
         def _fetch() -> dict[str, Any]:
+            import time as _time
             url = f"{_API_BASE}/v1/workouts/{workout_id}/workout_summary"
             resp = session.get(url, timeout=self._timeout)
-            if resp.status_code == 401:
+            if resp.status_code == 401 and not self._token_is_valid():
+                # Only refresh if the token actually expired — avoid
+                # hammering the token endpoint for permanently-unauthorized
+                # workouts (deleted, archived, wrong account).
                 self._refresh_access_token()
                 session.headers["Authorization"] = f"Bearer {self._access_token}"
+                resp = session.get(url, timeout=self._timeout)
+            if resp.status_code == 429:
+                retry_after = int(resp.headers.get("Retry-After", 30))
+                logger.warning(
+                    "Wahoo rate-limited (429) for workout %s, waiting %ds.",
+                    workout_id, retry_after,
+                )
+                _time.sleep(retry_after)
                 resp = session.get(url, timeout=self._timeout)
             resp.raise_for_status()
             data = resp.json()
