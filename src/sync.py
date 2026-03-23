@@ -9,6 +9,8 @@ import os
 import socket
 import sys
 import time
+
+import requests
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -389,8 +391,15 @@ def process_user_wahoo(
         # Process oldest-first so last_sync advances monotonically
         workouts.sort(key=lambda w: w.get("starts") or "")
 
+        skipped_401 = 0
         for idx, workout in enumerate(workouts, 1):
             wahoo_id = str(workout["id"])
+
+            # Skip workouts permanently marked as inaccessible
+            if store.is_wahoo_skipped(user_id, wahoo_id):
+                skipped_401 += 1
+                continue
+
             logger.info("[%s] Wahoo workout %d/%d: %s", name, idx, found, wahoo_id)
 
             existing = store.get_wahoo_activity(user_id, wahoo_id)
@@ -419,6 +428,14 @@ def process_user_wahoo(
                 # ── New workout — fetch summary, download FIT, store ──────
                 try:
                     summary = wahoo.get_workout_summary(wahoo_id, timeout=request_timeout)
+                except requests.exceptions.HTTPError as exc:
+                    if exc.response is not None and exc.response.status_code == 401:
+                        store.mark_wahoo_skipped(user_id, wahoo_id, "401 Unauthorized")
+                        skipped_401 += 1
+                        logger.warning("[%s] Workout %s inaccessible (401), permanently skipped.", name, wahoo_id)
+                        continue
+                    logger.error("[%s] Failed to fetch summary for %s: %s", name, wahoo_id, exc)
+                    continue
                 except Exception as exc:
                     logger.error("[%s] Failed to fetch summary for %s: %s", name, wahoo_id, exc)
                     continue
@@ -525,7 +542,10 @@ def process_user_wahoo(
             processed += 1
 
         store.finish_sync_run(run_id, found, processed, "success")
-        logger.info("[%s] Wahoo sync complete. %d found / %d processed.", name, found, processed)
+        if skipped_401:
+            logger.info("[%s] Wahoo sync complete. %d found / %d processed / %d permanently skipped (401).", name, found, processed, skipped_401)
+        else:
+            logger.info("[%s] Wahoo sync complete. %d found / %d processed.", name, found, processed)
 
     except Exception as exc:
         store.finish_sync_run(run_id, found, processed, "failed", str(exc))

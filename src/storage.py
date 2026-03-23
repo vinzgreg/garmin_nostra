@@ -110,6 +110,14 @@ CREATE INDEX IF NOT EXISTS idx_act_type      ON activities(activity_type);
 CREATE INDEX IF NOT EXISTS idx_act_start     ON activities(start_time_utc);
 CREATE INDEX IF NOT EXISTS idx_act_user_type ON activities(user_id, activity_type);
 
+CREATE TABLE IF NOT EXISTS wahoo_skipped (
+    user_id    INTEGER NOT NULL REFERENCES users(id),
+    wahoo_id   TEXT    NOT NULL,
+    reason     TEXT,
+    skipped_at TEXT    NOT NULL,
+    PRIMARY KEY (user_id, wahoo_id)
+);
+
 CREATE TABLE IF NOT EXISTS sync_runs (
     id                   INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id              INTEGER NOT NULL REFERENCES users(id),
@@ -398,6 +406,23 @@ class ActivityStore:
         self._conn.execute(
             "UPDATE activities SET wahoo_synced_to_garmin = 1 WHERE user_id = ? AND garmin_activity_id = ? AND source = 'WahooNoStra'",
             (user_id, wahoo_id),
+        )
+        self._conn.commit()
+
+    # ── Wahoo skipped workouts ────────────────────────────────────────────────
+
+    def is_wahoo_skipped(self, user_id: int, wahoo_id: str) -> bool:
+        row = self._conn.execute(
+            "SELECT 1 FROM wahoo_skipped WHERE user_id = ? AND wahoo_id = ?",
+            (user_id, wahoo_id),
+        ).fetchone()
+        return row is not None
+
+    def mark_wahoo_skipped(self, user_id: int, wahoo_id: str, reason: str) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        self._conn.execute(
+            "INSERT OR IGNORE INTO wahoo_skipped (user_id, wahoo_id, reason, skipped_at) VALUES (?, ?, ?, ?)",
+            (user_id, wahoo_id, reason, now),
         )
         self._conn.commit()
 
