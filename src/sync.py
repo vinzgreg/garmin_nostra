@@ -691,11 +691,17 @@ def _run_inner(config_path: str) -> None:
                         mastodon_max_age_days, mastodon_post_delay_s, kudos_machine,
                         tag_source=True, dedup_with_wahoo=True, skip_kudos=True,
                     )
-                else:
+                elif source == "garmin":
                     process_user(
                         user_cfg, store, bot, caldav_pusher, lookback_days,
                         request_timeout, gpx_max_age_days, fit_max_age_days,
                         mastodon_max_age_days, mastodon_post_delay_s, kudos_machine,
+                    )
+                else:
+                    logger.error(
+                        "User %s has unrecognised source=%r — valid values are "
+                        "'garmin', 'wahoo', 'both'. Skipping.",
+                        user_cfg.get("name"), source,
                     )
             except Exception as exc:
                 logger.error("Unhandled error for user %s: %s", user_cfg.get("name"), exc)
