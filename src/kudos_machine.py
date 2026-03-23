@@ -118,9 +118,6 @@ KUDOS_MESSAGES = [
     "Schweißgebadet und trotzdem König — so geht das!",
 ]
 
-assert len(KUDOS_MESSAGES) == 100, f"Expected 100 messages, got {len(KUDOS_MESSAGES)}"
-
-
 class KudosMachine:
     """
     Polls each posted Mastodon activity status for new favourites and replies
@@ -139,6 +136,9 @@ class KudosMachine:
     ) -> None:
         self._bot = bot
         self._post_delay_s = post_delay_s
+
+        if len(KUDOS_MESSAGES) != 100:
+            raise ValueError(f"Expected 100 kudos messages, got {len(KUDOS_MESSAGES)}")
 
         # Validate the custom template at startup so a typo doesn't crash
         # every kudos attempt at runtime.

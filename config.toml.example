@@ -135,14 +135,14 @@ caldav_enabled   = false
 # mastodon_handle       = "@dave@mastodon.social"
 # caldav_enabled        = false
 
-# ── source = "both_garmin_target" — fetch from both, push Wahoo → Garmin ────
-# Like "both", but Wahoo activities are automatically uploaded to Garmin
-# Connect as FIT files (wahoo_sync_to_garmin is implied). Use this when
-# Garmin Connect is the primary archive and Wahoo is a secondary source.
-# Garmin-native activities are NOT pushed anywhere — they already live there.
+# ── source = "both" + wahoo_sync_to_garmin — fetch from both, push Wahoo → Garmin ─
+# Like "both", but Wahoo activities are also uploaded to Garmin Connect as
+# FIT files. Use this when Garmin Connect is the primary archive and Wahoo
+# is a secondary source. Garmin-native activities are NOT pushed anywhere.
 # [[users]]
 # name                  = "eve"
-# source                = "both_garmin_target"
+# source                = "both"
+# wahoo_sync_to_garmin  = true
 # wahoo_client_id       = "your_client_id_here"
 # wahoo_client_secret   = "your_client_secret_here"
 # wahoo_refresh_token   = "your_refresh_token_here"

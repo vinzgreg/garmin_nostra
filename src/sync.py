@@ -20,7 +20,7 @@ except ImportError:
     import tomli as tomllib  # type: ignore[no-reattr]
 
 from garmin import GarminClient
-from wahoo import WahooClient, map_wahoo_activity
+from wahoo import WahooAuthError, WahooClient, map_wahoo_activity
 from storage import ActivityStore
 from caldav_push import CalDAVPusher
 from mastodon_bot import MastodonBot
@@ -484,24 +484,25 @@ def process_user_wahoo(
                 activity_row = existing
                 logger.debug("[%s] Wahoo workout %s already known.", name, wahoo_id)
                 map_path = None
-                if existing["caldav_pushed"] and existing["mastodon_posted"]:
-                    # Retry wahoo→garmin if still pending
-                    if (
-                        garmin_for_upload
-                        and not existing.get("wahoo_synced_to_garmin")
-                        and existing.get("fit_path")
-                    ):
-                        try:
-                            fit_data = Path(existing["fit_path"]).read_bytes()
-                            garmin_for_upload.upload_fit(fit_data, timeout=request_timeout)
+                # Retry wahoo→garmin if still pending (independent of mastodon/caldav)
+                if (
+                    garmin_for_upload
+                    and not existing.get("wahoo_synced_to_garmin")
+                    and existing.get("fit_path")
+                ):
+                    try:
+                        fit_data = Path(existing["fit_path"]).read_bytes()
+                        garmin_for_upload.upload_fit(fit_data, timeout=request_timeout)
+                        store.mark_wahoo_synced_to_garmin(user_id, wahoo_id)
+                        logger.info("[%s] Wahoo workout %s uploaded to Garmin (retry).", name, wahoo_id)
+                    except Exception as exc:
+                        if "duplicate" in str(exc).lower() or "conflict" in str(exc).lower():
+                            logger.warning("[%s] Garmin upload skipped for %s (likely duplicate): %s", name, wahoo_id, exc)
                             store.mark_wahoo_synced_to_garmin(user_id, wahoo_id)
-                            logger.info("[%s] Wahoo workout %s uploaded to Garmin (retry).", name, wahoo_id)
-                        except Exception as exc:
-                            if "duplicate" in str(exc).lower() or "conflict" in str(exc).lower():
-                                logger.warning("[%s] Garmin upload skipped for %s (likely duplicate): %s", name, wahoo_id, exc)
-                                store.mark_wahoo_synced_to_garmin(user_id, wahoo_id)
-                            else:
-                                logger.error("[%s] Garmin upload retry failed for %s: %s", name, wahoo_id, exc)
+                        else:
+                            logger.error("[%s] Garmin upload retry failed for %s: %s", name, wahoo_id, exc)
+
+                if existing["caldav_pushed"] and existing["mastodon_posted"]:
                     continue
 
             # ── CalDAV (optional) ─────────────────────────────────────────
@@ -547,6 +548,13 @@ def process_user_wahoo(
         else:
             logger.info("[%s] Wahoo sync complete. %d found / %d processed.", name, found, processed)
 
+    except WahooAuthError as exc:
+        store.finish_sync_run(run_id, found, processed, "failed", str(exc))
+        logger.error(
+            "[%s] Wahoo authentication failed permanently — the refresh token may be expired "
+            "or revoked. Re-run wahoo_auth.py to generate a new token. Error: %s",
+            name, exc,
+        )
     except Exception as exc:
         store.finish_sync_run(run_id, found, processed, "failed", str(exc))
         logger.error("[%s] Wahoo sync failed: %s", name, exc, exc_info=True)
@@ -589,14 +597,6 @@ def _run_inner(config_path: str) -> None:
     if log_file := storage_cfg.get("log_file"):
         _configure_log_file(log_file)
 
-    store = ActivityStore(
-        db_path=storage_cfg.get("db_path",   "/data/garmin_nostra.db"),
-        gpx_dir=storage_cfg.get("gpx_dir",   "/data/gpx"),
-        fit_dir=storage_cfg.get("fit_dir",   "/data/fit"),
-        map_dir=storage_cfg.get("map_dir",   "/data/maps"),
-        token_dir=storage_cfg.get("token_dir", "/data/tokens"),
-    )
-
     sync_cfg        = cfg.get("sync", {})
     lookback_days   = sync_cfg.get("lookback_days", 30)
     request_timeout = sync_cfg.get("request_timeout_s", 30)
@@ -605,7 +605,15 @@ def _run_inner(config_path: str) -> None:
     mastodon_max_age_days   = sync_cfg.get("mastodon_max_age_days", None)
     mastodon_post_delay_s   = float(sync_cfg.get("mastodon_post_delay_s", 2.0))
 
+    store: ActivityStore | None = None
     try:
+        store = ActivityStore(
+            db_path=storage_cfg.get("db_path",   "/data/garmin_nostra.db"),
+            gpx_dir=storage_cfg.get("gpx_dir",   "/data/gpx"),
+            fit_dir=storage_cfg.get("fit_dir",   "/data/fit"),
+            map_dir=storage_cfg.get("map_dir",   "/data/maps"),
+            token_dir=storage_cfg.get("token_dir", "/data/tokens"),
+        )
         bot_cfg = cfg["bot"]
         bot = MastodonBot(
             api_base_url=bot_cfg["mastodon_api_base_url"],
@@ -644,7 +652,7 @@ def _run_inner(config_path: str) -> None:
                         request_timeout, fit_max_age_days, mastodon_max_age_days,
                         mastodon_post_delay_s, kudos_machine,
                     )
-                elif source in ("both", "both_garmin_target"):
+                elif source == "both":
                     # Validate both credential sets
                     wahoo_missing = [
                         k for k in ("wahoo_client_id", "wahoo_client_secret", "wahoo_refresh_token")
@@ -668,15 +676,9 @@ def _run_inner(config_path: str) -> None:
                     # Wahoo entry already in the DB (cross-source dedup).
                     # Each side is isolated — a Wahoo failure must not prevent
                     # the Garmin sync from running.
-                    #
-                    # both_garmin_target: force wahoo_sync_to_garmin so Wahoo
-                    # activities are automatically uploaded to Garmin Connect.
-                    wahoo_cfg = user_cfg
-                    if source == "both_garmin_target":
-                        wahoo_cfg = {**user_cfg, "wahoo_sync_to_garmin": True}
                     try:
                         process_user_wahoo(
-                            wahoo_cfg, store, bot, caldav_pusher, lookback_days,
+                            user_cfg, store, bot, caldav_pusher, lookback_days,
                             request_timeout, fit_max_age_days, mastodon_max_age_days,
                             mastodon_post_delay_s, kudos_machine,
                         )
@@ -698,7 +700,8 @@ def _run_inner(config_path: str) -> None:
             except Exception as exc:
                 logger.error("Unhandled error for user %s: %s", user_cfg.get("name"), exc)
     finally:
-        store.close()
+        if store is not None:
+            store.close()
 
 
 if __name__ == "__main__":

@@ -248,7 +248,7 @@ class WahooClient:
         finally:
             ex.shutdown(wait=False)
 
-    def get_fit(self, workout_id: int | str, timeout: int = 30, summary: dict | None = None) -> bytes | None:
+    def get_fit(self, workout_id: int | str, timeout: int = 120, summary: dict | None = None) -> bytes | None:
         """Download FIT file bytes for a workout, or None if unavailable.
 
         The FIT URL is in the workout_summary's file.url field.
@@ -264,7 +264,7 @@ class WahooClient:
         fit_url = file_info["url"]
 
         def _download() -> bytes:
-            resp = requests.get(fit_url, timeout=self._timeout)
+            resp = requests.get(fit_url, timeout=timeout)
             resp.raise_for_status()
             return resp.content
 

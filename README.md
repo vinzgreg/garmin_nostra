@@ -186,27 +186,9 @@ garmin_password     = "your_garmin_password_here"
 mastodon_handle     = "@dave@mastodon.social"
 ```
 
-#### `source = "both_garmin_target"` — both sources, Wahoo pushed to Garmin
-
-Like `"both"`, but Wahoo activities are automatically uploaded to Garmin Connect as FIT files (`wahoo_sync_to_garmin` is implied). Use this when Garmin Connect is the primary archive and Wahoo is a secondary source. Garmin-native activities already live on Garmin and are not pushed anywhere.
-
-Duplicate detection applies: if Wahoo already auto-synced an activity to Garmin natively, the upload is skipped.
-
-```toml
-[[users]]
-name                = "eve"
-source              = "both_garmin_target"
-wahoo_client_id     = "your_client_id_here"
-wahoo_client_secret = "your_client_secret_here"
-wahoo_refresh_token = "your_refresh_token_here"
-garmin_username     = "eve@example.com"
-garmin_password     = "your_garmin_password_here"
-mastodon_handle     = "@eve@mastodon.social"
-```
-
 ### 4. Optional: sync Wahoo activities to Garmin Connect
 
-Only relevant for `source = "wahoo"`. To upload Wahoo activities to Garmin Connect automatically, add Garmin credentials to the same user block:
+Add `wahoo_sync_to_garmin = true` to upload Wahoo activities to Garmin Connect as FIT files. Works with `source = "wahoo"` or `source = "both"`.
 
 ```toml
 wahoo_sync_to_garmin = true
@@ -214,9 +196,22 @@ garmin_username      = "carol@example.com"
 garmin_password      = "env:CAROL_GARMIN_PASSWORD"
 ```
 
-Activities are uploaded as FIT files. If Wahoo has already synced the same activity to Garmin natively, the duplicate is detected and skipped.
+If Wahoo has already auto-synced an activity to Garmin natively, the duplicate is detected and skipped.
 
-> **Note:** For `source = "both"`, use `source = "both_garmin_target"` instead of setting `wahoo_sync_to_garmin` manually — it handles dedup correctly.
+Example for `source = "both"` with Wahoo pushed to Garmin:
+
+```toml
+[[users]]
+name                = "eve"
+source              = "both"
+wahoo_sync_to_garmin = true
+wahoo_client_id     = "your_client_id_here"
+wahoo_client_secret = "your_client_secret_here"
+wahoo_refresh_token = "your_refresh_token_here"
+garmin_username     = "eve@example.com"
+garmin_password     = "your_garmin_password_here"
+mastodon_handle     = "@eve@mastodon.social"
+```
 
 ---
 
@@ -369,7 +364,7 @@ One block per account (Garmin or Wahoo):
 | Key | Required | Description |
 |---|---|---|
 | `name` | ✓ | Unique identifier used for file/token paths |
-| `source` | `"garmin"` | `"garmin"` (default), `"wahoo"`, `"both"`, or `"both_garmin_target"` — see [source modes](#3-configure-the-user) |
+| `source` | `"garmin"` | `"garmin"` (default), `"wahoo"`, or `"both"` — see [source modes](#3-configure-the-user) |
 | `garmin_username` | Garmin/sync | Garmin Connect e-mail (required for `source = "garmin"` or `wahoo_sync_to_garmin`) |
 | `garmin_password` | Garmin/sync | Garmin Connect password |
 | `wahoo_client_id` | Wahoo | Wahoo developer app client ID |

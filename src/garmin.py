@@ -47,27 +47,33 @@ class GarminClient:
 
     def connect(self) -> None:
         logger.info("Connecting to Garmin Connect for %s …", self._username)
-        self._client = Garmin(self._username, self._password)
+        self._client = None
         try:
-            self._client.login(self._tokenstore)
-            self._apply_timeout(self._client)
-            logger.info("Authenticated (token store: %s).", self._tokenstore or "none")
-        except GarminConnectAuthenticationError as exc:
-            raise RuntimeError(
-                f"Garmin authentication failed for {self._username}: {exc}"
-            ) from exc
-        except Exception as exc:
-            logger.warning("Token login failed (%s) — retrying with credentials.", exc)
-            self._client = Garmin(self._username, self._password)
-            self._client.login()
-            self._apply_timeout(self._client)
-            if self._tokenstore:
-                Path(self._tokenstore).mkdir(parents=True, exist_ok=True)
-                try:
-                    self._client.garth.dump(self._tokenstore)
-                except Exception as dump_exc:
-                    logger.debug("Could not save tokens: %s", dump_exc)
-            logger.info("Authenticated with credentials.")
+            client = Garmin(self._username, self._password)
+            try:
+                client.login(self._tokenstore)
+                self._apply_timeout(client)
+                logger.info("Authenticated (token store: %s).", self._tokenstore or "none")
+            except GarminConnectAuthenticationError as exc:
+                raise RuntimeError(
+                    f"Garmin authentication failed for {self._username}: {exc}"
+                ) from exc
+            except Exception as exc:
+                logger.warning("Token login failed (%s) — retrying with credentials.", exc)
+                client = Garmin(self._username, self._password)
+                client.login()
+                self._apply_timeout(client)
+                if self._tokenstore:
+                    Path(self._tokenstore).mkdir(parents=True, exist_ok=True)
+                    try:
+                        client.garth.dump(self._tokenstore)
+                    except Exception as dump_exc:
+                        logger.warning("Could not save tokens to %s: %s", self._tokenstore, dump_exc)
+                logger.info("Authenticated with credentials.")
+            self._client = client
+        except Exception:
+            self._client = None
+            raise
 
     def _client_(self) -> Garmin:
         if self._client is None:
