@@ -207,6 +207,19 @@ class WahooClient:
         finally:
             ex.shutdown(wait=False)
 
+        # updated_after may return workouts that started before `since` (e.g. edits
+        # to old workouts). Filter by start time to enforce the lookback window.
+        before = len(result)
+        result = [
+            w for w in result
+            if w.get("starts") and
+            datetime.fromisoformat(w["starts"].replace("Z", "+00:00")) > since
+        ]
+        if len(result) != before:
+            logger.info(
+                "Filtered %d Wahoo workout(s) with start time before %s.",
+                before - len(result), since.isoformat(),
+            )
         logger.info("Found %d Wahoo workouts since %s.", len(result), since.isoformat())
         return result
 

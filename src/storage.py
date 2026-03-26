@@ -94,6 +94,7 @@ CREATE TABLE IF NOT EXISTS activities (
     mastodon_posted         INTEGER NOT NULL DEFAULT 0,
     mastodon_status_id      TEXT,
     synced_at               TEXT    NOT NULL,
+    date_inserted           TEXT,
 
     UNIQUE(user_id, garmin_activity_id)
 );
@@ -209,10 +210,10 @@ def _map_activity(user_id: int, act: dict) -> dict:
 
 class ActivityStore:
     def __init__(self, db_path: str, gpx_dir: str, map_dir: str, token_dir: str, fit_dir: str = "/data/fit") -> None:
-        self.gpx_dir   = Path(gpx_dir)
-        self.fit_dir   = Path(fit_dir)
-        self.map_dir   = Path(map_dir)
-        self.token_dir = Path(token_dir)
+        self.gpx_dir   = Path(gpx_dir).expanduser()
+        self.fit_dir   = Path(fit_dir).expanduser()
+        self.map_dir   = Path(map_dir).expanduser()
+        self.token_dir = Path(token_dir).expanduser()
         for d in (self.gpx_dir, self.fit_dir, self.map_dir, self.token_dir):
             d.mkdir(parents=True, exist_ok=True)
 
@@ -240,6 +241,7 @@ class ActivityStore:
             ("wahoo_activity_id", "TEXT"),
             ("wahoo_synced_to_garmin", "INTEGER DEFAULT 0"),
             ("suppressed", "TEXT"),
+            ("date_inserted", "TEXT"),
         ]:
             try:
                 self._conn.execute(f"ALTER TABLE activities ADD COLUMN {col} {definition}")
@@ -413,6 +415,7 @@ class ActivityStore:
                     row["garmin_activity_id"], wahoo_overlap["garmin_activity_id"],
                 )
 
+        row["date_inserted"] = datetime.now(timezone.utc).date().isoformat()
         cols   = ", ".join(row.keys())
         placeholders = ", ".join(f":{k}" for k in row.keys())
         self._conn.execute(
@@ -468,6 +471,7 @@ class ActivityStore:
         if fit_path:
             mapped_row["fit_path"] = str(fit_path)
         mapped_row["wahoo_activity_id"] = mapped_row["garmin_activity_id"]
+        mapped_row["date_inserted"] = datetime.now(timezone.utc).date().isoformat()
 
         cols = ", ".join(mapped_row.keys())
         placeholders = ", ".join(f":{k}" for k in mapped_row.keys())
