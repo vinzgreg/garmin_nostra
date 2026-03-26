@@ -213,7 +213,7 @@ class WahooClient:
         result = [
             w for w in result
             if w.get("starts") and
-            datetime.fromisoformat(w["starts"].replace("Z", "+00:00")) > since
+            datetime.fromisoformat(w["starts"].replace("Z", "+00:00")) >= since
         ]
         if len(result) != before:
             logger.info(
