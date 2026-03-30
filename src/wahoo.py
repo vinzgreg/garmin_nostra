@@ -8,6 +8,7 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import requests
 
@@ -356,14 +357,25 @@ def map_wahoo_activity(user_id: int, workout: dict, summary: dict) -> dict:
     activity_type = wahoo_activity_type(workout_type_id)
 
     starts_str = workout.get("starts") or ""
+    start_utc = None
+    start_local = None
     try:
         start_dt = datetime.fromisoformat(starts_str.replace("Z", "+00:00"))
         if start_dt.tzinfo is None:
             start_dt = start_dt.replace(tzinfo=timezone.utc)
         start_utc = start_dt.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        tz_name = summary.get("time_zone")
+        if tz_name:
+            try:
+                local_dt = start_dt.astimezone(ZoneInfo(tz_name))
+                start_local = local_dt.strftime("%Y-%m-%d %H:%M:%S")
+            except ZoneInfoNotFoundError:
+                logger.warning("Unknown Wahoo timezone %r, falling back to UTC for local time.", tz_name)
+                start_local = start_utc
+        else:
+            start_local = start_utc
     except (ValueError, AttributeError):
-        start_utc = None
-    start_local = start_utc  # Wahoo doesn't provide separate local time
+        pass
 
     duration_total = _safe_float(summary.get("duration_total_accum"))
     duration_active = _safe_float(summary.get("duration_active_accum"))
