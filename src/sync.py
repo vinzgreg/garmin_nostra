@@ -146,6 +146,11 @@ def process_user(
     since    = store.get_last_sync_time(user_id)
     earliest = datetime.now(timezone.utc) - timedelta(days=lookback_days)
     since    = max(since, earliest)
+    # Always look back at least 2 hours so that recently-saved activities
+    # are re-fetched — Garmin may not have finished computing all metrics
+    # (e.g. averagePower for trainer workouts) at initial sync time.
+    metrics_cutoff = datetime.now(timezone.utc) - timedelta(hours=2)
+    since = min(since, metrics_cutoff)
     logger.info("[%s] Syncing activities since %s.", name, since.isoformat())
 
     garmin = GarminClient(
@@ -268,6 +273,12 @@ def process_user(
                         name, garmin_id, activity_row["suppressed"],
                     )
                     continue
+                # Defer integrations to the next sync cycle — Garmin may not
+                # have finished computing all metrics (e.g. averagePower for
+                # trainer workouts) at upload time.  The 2-hour lookback
+                # window ensures this activity is re-fetched on the next run.
+                logger.info("[%s] Activity %s saved — deferring integrations to next sync.", name, garmin_id)
+                continue
             else:
                 # ── Known activity — check if any integration needs retry ───
                 activity_row = existing
@@ -276,6 +287,11 @@ def process_user(
                 # Skip suppressed activities and those already fully processed
                 if existing.get("suppressed") or (existing["caldav_pushed"] and existing["mastodon_posted"]):
                     continue
+                # Backfill metrics that Garmin may have computed since the
+                # initial sync (e.g. averagePower for trainer workouts).
+                # Only fills NULLs — never overwrites existing values.
+                store.backfill_activity_metrics(user_id, garmin_id, act)
+                activity_row = store.get_activity(user_id, garmin_id)
 
             # ── CalDAV (optional) ──────────────────────────────────────────
             if caldav_enabled and caldav_pusher and not activity_row.get("caldav_pushed"):

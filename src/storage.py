@@ -425,6 +425,32 @@ class ActivityStore:
         logger.debug("Activity %s saved.", row["garmin_activity_id"])
         return row
 
+    def backfill_activity_metrics(self, user_id: int, garmin_id: str, act: dict) -> None:
+        """Fill in NULL metric columns from a fresh Garmin API response.
+
+        Only touches rows where the column is currently NULL — never
+        overwrites an existing value.  Safe to call repeatedly.
+        """
+        self._conn.execute(
+            """UPDATE activities SET
+                avg_power_w        = COALESCE(avg_power_w,        :avg_power_w),
+                max_power_w        = COALESCE(max_power_w,        :max_power_w),
+                normalized_power_w = COALESCE(normalized_power_w, :normalized_power_w),
+                avg_hr             = COALESCE(avg_hr,             :avg_hr),
+                max_hr             = COALESCE(max_hr,             :max_hr)
+            WHERE user_id = :user_id AND garmin_activity_id = :garmin_id""",
+            {
+                "avg_power_w":        act.get("averagePower"),
+                "max_power_w":        act.get("maxPower"),
+                "normalized_power_w": act.get("normPower") or act.get("normalizedPower"),
+                "avg_hr":             act.get("averageHR"),
+                "max_hr":             act.get("maxHR"),
+                "user_id":            user_id,
+                "garmin_id":          garmin_id,
+            },
+        )
+        self._conn.commit()
+
     def mark_caldav_pushed(self, user_id: int, garmin_activity_id: str) -> None:
         self._conn.execute(
             "UPDATE activities SET caldav_pushed = 1 WHERE user_id = ? AND garmin_activity_id = ?",
