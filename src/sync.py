@@ -273,12 +273,13 @@ def process_user(
                         name, garmin_id, activity_row["suppressed"],
                     )
                     continue
-                # Defer integrations to the next sync cycle — Garmin may not
-                # have finished computing all metrics (e.g. averagePower for
-                # trainer workouts) at upload time.  The 2-hour lookback
-                # window ensures this activity is re-fetched on the next run.
-                logger.info("[%s] Activity %s saved — deferring integrations to next sync.", name, garmin_id)
-                continue
+                # For indoor cycling, defer integrations to the next sync cycle
+                # — Garmin may not have finished computing averagePower at
+                # upload time.  The 2-hour lookback window ensures this
+                # activity is re-fetched on the next run.
+                if activity_row.get("activity_type") == "indoor_cycling":
+                    logger.info("[%s] Activity %s saved — deferring integrations to next sync (indoor cycling).", name, garmin_id)
+                    continue
             else:
                 # ── Known activity — check if any integration needs retry ───
                 activity_row = existing
