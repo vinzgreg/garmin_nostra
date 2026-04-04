@@ -508,6 +508,73 @@ ORDER BY a.start_time_utc;
 
 ---
 
+## Development & testing
+
+### Install dev dependencies
+
+```bash
+pip install -r requirements-dev.txt
+```
+
+### Run the test suite
+
+```bash
+python3 -m pytest tests/ -q
+```
+
+All tests are offline — no Garmin, Wahoo, Mastodon, or CalDAV credentials are needed. External services are replaced by mocks.
+
+Expected output:
+
+```
+118 passed in ~27s
+```
+
+### Test structure
+
+| File | What it covers |
+|---|---|
+| `tests/test_format.py` | German formatting helpers and `build_mastodon_message` |
+| `tests/test_storage.py` | `ActivityStore` — save/get, deduplication, power backfill, cross-source suppression |
+| `tests/test_wahoo_map.py` | `map_wahoo_activity`, Wahoo type mapping, safe-conversion helpers |
+| `tests/test_sync_logic.py` | Full sync flow with mocked API clients (Garmin, Wahoo, Mastodon, CalDAV) |
+
+Fixtures in `tests/fixtures/` are anonymized JSON files — no real GPS coordinates, account names, or activity IDs.
+
+### Scenarios covered by the tests
+
+- **Running** — distance, pace, HR stored and formatted correctly
+- **Outdoor cycling** — distance, speed, elevation
+- **Indoor cycling** — initial save without power (`avg_power_w = NULL`), then filled by `backfill_activity_metrics` on the second sync cycle
+- **No double-insert** — `INSERT OR IGNORE` verified for both Garmin and Wahoo activities
+- **Cross-source dedup** — Wahoo activity suppresses overlapping Garmin entry, regardless of which arrived first
+- **Wahoo→Garmin bridge** — FIT file uploaded on first sync, duplicate error handled gracefully, no retry after success
+- **10-minute gate** — activities younger than 10 minutes are skipped until the next cycle
+- **Indoor cycling deferral** — integrations (Mastodon, CalDAV) deferred to next cycle so Garmin finishes computing power
+
+### Run only specific tests
+
+```bash
+# One module
+python3 -m pytest tests/test_storage.py -v
+
+# One test by name
+python3 -m pytest tests/test_storage.py::test_backfill_fills_null_power -v
+
+# Only fast unit tests (no mocked network overhead)
+python3 -m pytest tests/test_format.py tests/test_wahoo_map.py -v
+```
+
+### Integration tests (requires live credentials)
+
+Integration tests that hit the real Garmin or Wahoo APIs are not included in the default suite. Mark them with `@pytest.mark.integration` and run with:
+
+```bash
+python3 -m pytest tests/ -m integration
+```
+
+---
+
 ## Module overview
 
 | File | Role |

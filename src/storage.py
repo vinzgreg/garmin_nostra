@@ -146,14 +146,21 @@ def _sport_type_key(raw: Any) -> str | None:
 
 def _cadence(act: dict) -> int | None:
     return (
-        act.get("averageRunCadence")
+        act.get("averageRunningCadenceInStepsPerMinute")
+        or act.get("averageBikingCadenceInRevPerMinute")
+        or act.get("averageRunCadence")
         or act.get("averageBikeCadence")
         or act.get("averageCadence")
     )
 
 
 def _max_cadence(act: dict) -> int | None:
-    return act.get("maxRunCadence") or act.get("maxBikeCadence")
+    return (
+        act.get("maxRunningCadenceInStepsPerMinute")
+        or act.get("maxBikingCadenceInRevPerMinute")
+        or act.get("maxRunCadence")
+        or act.get("maxBikeCadence")
+    )
 
 
 def _map_activity(user_id: int, act: dict) -> dict:
@@ -180,7 +187,7 @@ def _map_activity(user_id: int, act: dict) -> dict:
         "avg_hr":                  act.get("averageHR"),
         "max_hr":                  act.get("maxHR"),
         "resting_hr":              act.get("restingHeartRate"),
-        "avg_power_w":             act.get("averagePower"),
+        "avg_power_w":             act.get("averagePower") or act.get("avgPower"),
         "max_power_w":             act.get("maxPower"),
         "normalized_power_w":      act.get("normPower") or act.get("normalizedPower"),
         "avg_cadence":             _cadence(act),
@@ -271,6 +278,41 @@ class ActivityStore:
                         + COALESCE(w.duration_s, 0)
                       > CAST(strftime('%s', activities.start_time_utc) AS INTEGER)
               )
+        """)
+        # Backfill avg_power_w from raw_json for Garmin activities where the
+        # column is NULL but the JSON contains 'avgPower' (the field name the
+        # Garmin activity-list API actually uses — previous code only looked
+        # for 'averagePower' which was never present).  Idempotent.
+        self._conn.execute("""
+            UPDATE activities
+            SET avg_power_w = CAST(json_extract(raw_json, '$.avgPower') AS REAL)
+            WHERE avg_power_w IS NULL
+              AND source = 'GarminNoStra'
+              AND json_extract(raw_json, '$.avgPower') IS NOT NULL
+        """)
+        # Same for cadence: Garmin returns averageRunningCadenceInStepsPerMinute
+        # and averageBikingCadenceInRevPerMinute, not averageRunCadence.
+        self._conn.execute("""
+            UPDATE activities
+            SET avg_cadence = COALESCE(
+                CAST(json_extract(raw_json, '$.averageRunningCadenceInStepsPerMinute') AS INTEGER),
+                CAST(json_extract(raw_json, '$.averageBikingCadenceInRevPerMinute') AS INTEGER)
+            )
+            WHERE avg_cadence IS NULL
+              AND source = 'GarminNoStra'
+              AND (json_extract(raw_json, '$.averageRunningCadenceInStepsPerMinute') IS NOT NULL
+                OR json_extract(raw_json, '$.averageBikingCadenceInRevPerMinute') IS NOT NULL)
+        """)
+        self._conn.execute("""
+            UPDATE activities
+            SET max_cadence = COALESCE(
+                CAST(json_extract(raw_json, '$.maxRunningCadenceInStepsPerMinute') AS INTEGER),
+                CAST(json_extract(raw_json, '$.maxBikingCadenceInRevPerMinute') AS INTEGER)
+            )
+            WHERE max_cadence IS NULL
+              AND source = 'GarminNoStra'
+              AND (json_extract(raw_json, '$.maxRunningCadenceInStepsPerMinute') IS NOT NULL
+                OR json_extract(raw_json, '$.maxBikingCadenceInRevPerMinute') IS NOT NULL)
         """)
         self._conn.commit()
 
@@ -437,14 +479,18 @@ class ActivityStore:
                 max_power_w        = COALESCE(max_power_w,        :max_power_w),
                 normalized_power_w = COALESCE(normalized_power_w, :normalized_power_w),
                 avg_hr             = COALESCE(avg_hr,             :avg_hr),
-                max_hr             = COALESCE(max_hr,             :max_hr)
+                max_hr             = COALESCE(max_hr,             :max_hr),
+                avg_cadence        = COALESCE(avg_cadence,        :avg_cadence),
+                max_cadence        = COALESCE(max_cadence,        :max_cadence)
             WHERE user_id = :user_id AND garmin_activity_id = :garmin_id""",
             {
-                "avg_power_w":        act.get("averagePower"),
+                "avg_power_w":        act.get("averagePower") or act.get("avgPower"),
                 "max_power_w":        act.get("maxPower"),
                 "normalized_power_w": act.get("normPower") or act.get("normalizedPower"),
                 "avg_hr":             act.get("averageHR"),
                 "max_hr":             act.get("maxHR"),
+                "avg_cadence":        _cadence(act),
+                "max_cadence":        _max_cadence(act),
                 "user_id":            user_id,
                 "garmin_id":          garmin_id,
             },

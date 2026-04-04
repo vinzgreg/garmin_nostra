@@ -10,12 +10,9 @@ from typing import Any
 import caldav
 from icalendar import Calendar, Event, vText
 
-from format import activity_meta, fmt_duration, fmt_num, fmt_pace, fmt_speed
+from format import activity_meta, fmt_duration, fmt_num, fmt_pace, fmt_speed, _is_speed_type, _PACE_TYPES
 
 logger = logging.getLogger(__name__)
-
-_SPEED_TYPES = {"cycling", "mountain_biking", "indoor_cycling", "road_biking"}
-_PACE_TYPES  = {"running", "trail_running", "treadmill_running", "hiking", "walking"}
 
 
 def _build_vevent(activity: dict[str, Any]) -> bytes:
@@ -58,7 +55,7 @@ def _build_vevent(activity: dict[str, Any]) -> bytes:
         desc_lines.append(f"Distanz: {fmt_num(distance_m / 1000.0, 2)} km")
     if act_type in _PACE_TYPES and distance_m > 0 and duration_s > 0:
         desc_lines.append(f"Pace: {fmt_pace(duration_s, distance_m)}")
-    elif act_type in _SPEED_TYPES and distance_m > 0 and duration_s > 0:
+    elif _is_speed_type(act_type) and distance_m > 0 and duration_s > 0:
         desc_lines.append(f"Geschwindigkeit: {fmt_speed(distance_m, duration_s)}")
     if elev_m > 0:
         desc_lines.append(f"Anstieg: {int(elev_m)} m")

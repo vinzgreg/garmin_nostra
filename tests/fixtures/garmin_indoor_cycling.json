@@ -1,0 +1,32 @@
+{
+  "activityId": 10000000003,
+  "activityName": "Indoor Cycling",
+  "startTimeLocal": "2026-03-10 08:00:00",
+  "startTimeGMT": "2026-03-10 07:00:00",
+  "activityType": {
+    "typeId": 6,
+    "typeKey": "indoor_cycling",
+    "parentTypeId": 17,
+    "isHidden": false,
+    "restricted": false,
+    "trimmable": true
+  },
+  "eventType": {"typeId": 9, "typeKey": "uncategorized", "sortOrder": 10},
+  "distance": 0,
+  "duration": 3600.0,
+  "elapsedDuration": 3610.0,
+  "movingDuration": 3600.0,
+  "elevationGain": 0,
+  "elevationLoss": 0,
+  "averageSpeed": 6.1,
+  "maxSpeed": 12.5,
+  "calories": 820,
+  "averageHR": 138,
+  "maxHR": 172,
+  "averageBikingCadenceInRevPerMinute": 88,
+  "maxBikingCadenceInRevPerMinute": 105,
+  "timeZoneId": 124,
+  "avgPower": 222,
+  "maxPower": 380,
+  "normPower": 225
+}

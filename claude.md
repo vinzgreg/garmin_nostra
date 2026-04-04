@@ -80,6 +80,61 @@ See `garmin-sync/README.md` for the full feature list and file map.
 
 ---
 
+## Tests
+
+The project has a pytest suite under `tests/`. Run it with:
+
+```bash
+python3 -m pytest tests/ -q
+```
+
+### When to run tests
+
+- **After any edit to `src/`** — run the full suite before considering the
+  task done. If tests fail, fix them before moving on.
+- **After a bug fix** — confirm the relevant test now passes and no other
+  test regressed.
+- **When tests cannot be run** (e.g. missing dependencies in this
+  environment) — tell the user explicitly and suggest they run
+  `python3 -m pytest tests/ -q` themselves before deploying.
+
+### Test structure
+
+| File | What it covers |
+|---|---|
+| `tests/test_format.py` | All formatting helpers and `build_mastodon_message` |
+| `tests/test_storage.py` | `ActivityStore` — save/get, dedup, backfill, cross-source suppression |
+| `tests/test_wahoo_map.py` | `map_wahoo_activity`, type mapping, safe-conversion helpers |
+| `tests/test_sync_logic.py` | `process_user` / `process_user_wahoo` with mocked API clients |
+
+Fixtures live in `tests/fixtures/` as anonymized JSON files (no real
+coordinates, names, or IDs).
+
+### Key scenarios covered
+
+- Running, outdoor cycling, indoor cycling (with and without power)
+- Power backfill: initial save with `avg_power_w = NULL`, then filled by
+  `backfill_activity_metrics`
+- No double-insert: `INSERT OR IGNORE` verified for both Garmin and Wahoo
+- Cross-source dedup: Wahoo activity suppresses overlapping Garmin entry
+  (both directions — Wahoo first and Garmin first)
+- Wahoo→Garmin bridge: FIT upload called, duplicate rejection handled,
+  no retry after success
+- Activities that are too recent (<10 min) are skipped
+- Indoor cycling integrations are deferred to the next sync cycle
+
+### Garmin API field name variants
+
+The Garmin activity-list API uses inconsistent field names across
+activity types (e.g. `avgPower` instead of `averagePower`,
+`averageRunningCadenceInStepsPerMinute` instead of
+`averageRunCadence`).  The mapping in `storage._map_activity` and
+`backfill_activity_metrics` handles both variants via `or` fallbacks.
+If new field name variants appear, add them to the same `or` chain
+and include them in the backfill migration in `_migrate()`.
+
+---
+
 ## What NOT to do
 - Do not add docstrings, comments, or type annotations to code that wasn't
   changed.

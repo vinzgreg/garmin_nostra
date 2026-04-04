@@ -1,0 +1,30 @@
+{
+  "activityId": 10000000002,
+  "activityName": "Outdoor Ride",
+  "startTimeLocal": "2023-06-25 10:52:35",
+  "startTimeGMT": "2023-06-25 08:52:35",
+  "activityType": {
+    "typeId": 2,
+    "typeKey": "cycling",
+    "parentTypeId": 17,
+    "isHidden": false,
+    "restricted": false,
+    "trimmable": true
+  },
+  "eventType": {"typeId": 9, "typeKey": "uncategorized", "sortOrder": 10},
+  "distance": 50531.0,
+  "duration": 8822.0,
+  "elapsedDuration": 9000.0,
+  "movingDuration": 8625.0,
+  "elevationGain": 210.0,
+  "elevationLoss": 173.0,
+  "averageSpeed": 5.73,
+  "maxSpeed": 10.42,
+  "startLatitude": 48.10,
+  "startLongitude": 11.60,
+  "calories": 896,
+  "averageHR": 103,
+  "maxHR": 127,
+  "averageBikingCadenceInRevPerMinute": 85,
+  "timeZoneId": 124
+}

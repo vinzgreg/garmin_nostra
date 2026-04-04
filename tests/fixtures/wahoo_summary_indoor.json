@@ -1,0 +1,29 @@
+{
+  "id": 30000000002,
+  "name": "KICKR Session",
+  "started_at": "2025-07-27T08:41:00.000Z",
+  "ascent_accum": null,
+  "calories_accum": "620",
+  "cadence_avg": "81",
+  "distance_accum": "22093.0",
+  "duration_active_accum": "2985.0",
+  "duration_paused_accum": "15.0",
+  "duration_total_accum": "3000.0",
+  "heart_rate_avg": "105",
+  "power_avg": "139.0",
+  "power_bike_np_last": "146.0",
+  "power_bike_tss_last": "55.0",
+  "speed_avg": "7.4",
+  "work_accum": "415215",
+  "time_zone": "Europe/Berlin",
+  "manual": false,
+  "edited": null,
+  "file": {
+    "url": "https://example.invalid/test_indoor.fit",
+    "fitness_app_id": 1
+  },
+  "files": [],
+  "fitness_app_id": 1,
+  "created_at": "2025-07-27T09:35:00.000Z",
+  "updated_at": "2025-07-27T09:35:01.000Z"
+}
