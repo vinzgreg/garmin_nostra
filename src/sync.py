@@ -19,7 +19,7 @@ try:
 except ImportError:
     import tomli as tomllib  # type: ignore[no-reattr]
 
-from garmin import GarminClient
+from garmin import GarminClient, GarminRateLimitError
 from wahoo import WahooAuthError, WahooClient, map_wahoo_activity
 from storage import ActivityStore
 from caldav_push import CalDAVPusher
@@ -337,6 +337,9 @@ def process_user(
         store.finish_sync_run(run_id, found, processed, "success")
         logger.info("[%s] Sync complete. %d found / %d processed.", name, found, processed)
 
+    except GarminRateLimitError as exc:
+        store.finish_sync_run(run_id, found, processed, "failed", str(exc))
+        logger.warning("[%s] Garmin sync skipped: %s", name, exc)
     except Exception as exc:
         store.finish_sync_run(run_id, found, processed, "failed", str(exc))
         logger.error("[%s] Sync failed: %s", name, exc, exc_info=True)

@@ -3,13 +3,53 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 from garminconnect import Garmin, GarminConnectAuthenticationError
 
 logger = logging.getLogger(__name__)
+
+
+class GarminRateLimitError(Exception):
+    """Raised when a Garmin SSO credential login is blocked by a 429 response."""
+
+
+# How long to wait before retrying a credential login after a 429 response.
+_RATE_LIMIT_BACKOFF_HOURS = 2
+
+
+def _backoff_path(tokenstore: str | None) -> Path | None:
+    if not tokenstore:
+        return None
+    return Path(tokenstore) / ".rate_limited_until"
+
+
+def _read_backoff_until(tokenstore: str | None) -> datetime | None:
+    path = _backoff_path(tokenstore)
+    if path is None or not path.exists():
+        return None
+    try:
+        return datetime.fromisoformat(path.read_text().strip())
+    except Exception:
+        return None
+
+
+def _write_backoff(tokenstore: str | None) -> None:
+    path = _backoff_path(tokenstore)
+    if path is None:
+        return
+    until = datetime.now(timezone.utc) + timedelta(hours=_RATE_LIMIT_BACKOFF_HOURS)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(until.isoformat())
+    logger.warning("Garmin credential login rate-limited — backing off until %s.", until.isoformat())
+
+
+def _clear_backoff(tokenstore: str | None) -> None:
+    path = _backoff_path(tokenstore)
+    if path is not None:
+        path.unlink(missing_ok=True)
 
 
 class GarminClient:
@@ -60,9 +100,25 @@ class GarminClient:
                 ) from exc
             except Exception as exc:
                 logger.warning("Token login failed (%s) — retrying with credentials.", exc)
-                client = Garmin(self._username, self._password)
-                client.login()
+                backoff_until = _read_backoff_until(self._tokenstore)
+                if backoff_until is not None and datetime.now(timezone.utc) < backoff_until:
+                    raise GarminRateLimitError(
+                        f"Garmin SSO is rate-limiting {self._username} — "
+                        f"will retry after {backoff_until.isoformat()}."
+                    ) from None
+                try:
+                    client = Garmin(self._username, self._password)
+                    client.login()
+                except Exception as login_exc:
+                    if "429" in str(login_exc):
+                        _write_backoff(self._tokenstore)
+                        raise GarminRateLimitError(
+                            f"Garmin SSO returned 429 for {self._username} — "
+                            f"credential login blocked for {_RATE_LIMIT_BACKOFF_HOURS}h."
+                        ) from None
+                    raise
                 self._apply_timeout(client)
+                _clear_backoff(self._tokenstore)
                 if self._tokenstore:
                     Path(self._tokenstore).mkdir(parents=True, exist_ok=True)
                     try:
