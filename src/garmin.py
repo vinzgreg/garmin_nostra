@@ -17,7 +17,7 @@ class GarminRateLimitError(Exception):
 
 
 # How long to wait before retrying a credential login after a 429 response.
-_RATE_LIMIT_BACKOFF_HOURS = 2
+_RATE_LIMIT_BACKOFF_HOURS = 24
 
 
 def _backoff_path(tokenstore: str | None) -> Path | None:
