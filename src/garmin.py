@@ -98,7 +98,13 @@ class GarminClient:
                 f"Garmin SSO returned 429 for {self._username} — "
                 f"credential login blocked for {_RATE_LIMIT_BACKOFF_HOURS}h."
             ) from None
-        except GarminConnectAuthenticationError:
+        except GarminConnectAuthenticationError as exc:
+            if isinstance(exc.__cause__, GarminConnectTooManyRequestsError) or "429" in str(exc):
+                _write_backoff(self._tokenstore)
+                raise GarminRateLimitError(
+                    f"Garmin SSO returned 429 for {self._username} — "
+                    f"credential login blocked for {_RATE_LIMIT_BACKOFF_HOURS}h."
+                ) from None
             raise
         except Exception:
             self._client = None
