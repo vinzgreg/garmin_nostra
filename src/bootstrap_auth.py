@@ -195,17 +195,20 @@ def _bootstrap_user(username: str, password: str, token_dir: Path) -> None:
         print(f"Opening browser: {signin_full_url}")
         page.goto(signin_full_url)
 
-        # Auto-fill credentials — try common selector variants
+        # Auto-fill credentials using locator API which dispatches proper input
+        # events required to enable React/Vue-controlled submit buttons.
         try:
-            page.wait_for_selector(
-                "input[name='username'], input[type='email']", timeout=10_000
-            )
-            page.fill("input[name='username'], input[type='email']", username)
-            page.fill("input[name='password'], input[type='password']", password)
-            page.click("button[type='submit']")
+            username_loc = page.locator("input[name='username'], input[type='email']")
+            username_loc.wait_for(timeout=10_000)
+            username_loc.fill(username)
+            page.locator("input[name='password'], input[type='password']").fill(password)
+            # Wait for the submit button to become enabled after field events fire
+            submit = page.locator("button[type='submit']")
+            submit.wait_for(state="enabled", timeout=5_000)
+            submit.click()
             print("Credentials filled. Complete any CAPTCHA or MFA in the browser window …")
         except Exception as e:
-            print(f"Could not auto-fill form ({e}). Please log in manually in the browser.")
+            print(f"Could not auto-fill or submit form ({e}). Please log in manually in the browser.")
 
         # Wait up to 5 minutes for the service ticket
         deadline = time.monotonic() + 300
