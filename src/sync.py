@@ -607,8 +607,35 @@ def run(config_path: str) -> None:
         os.close(lock_fd)
 
 
+def _is_paused(sync_cfg: dict) -> bool:
+    """Return True if the current local time falls inside the configured pause window."""
+    pause_start = sync_cfg.get("pause_start")
+    pause_end = sync_cfg.get("pause_end")
+    if not pause_start or not pause_end:
+        return False
+
+    now = datetime.now().time()
+    start = datetime.strptime(pause_start, "%H:%M").time()
+    end = datetime.strptime(pause_end, "%H:%M").time()
+
+    if start <= end:
+        # e.g. 08:00–12:00
+        return start <= now < end
+    else:
+        # wraps midnight, e.g. 22:00–06:00
+        return now >= start or now < end
+
+
 def _run_inner(config_path: str) -> None:
     cfg = load_config(config_path)
+
+    sync_cfg_early = cfg.get("sync", {})
+    if _is_paused(sync_cfg_early):
+        logger.info(
+            "Sync paused (pause window %s–%s). Skipping this cycle.",
+            sync_cfg_early["pause_start"], sync_cfg_early["pause_end"],
+        )
+        return
 
     # Safety ceiling: cap any socket that lacks its own timeout so a hung
     # connection cannot block the process forever.  Set higher than the

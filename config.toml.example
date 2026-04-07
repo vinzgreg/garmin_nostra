@@ -35,6 +35,11 @@ lookback_days = 30
 # mastodon_post_delay_s = 2.0
 # Timeout in seconds for external HTTP calls
 # request_timeout_s = 30
+# Pause sync during these hours (local time, HH:MM). Omit both to disable.
+# When active, the sync loop still wakes up but skips all work until the
+# window ends. Useful to avoid overnight API calls.
+# pause_start = "22:00"
+# pause_end   = "06:00"
 
 # ── Optional shared CalDAV server ───────────────────────────────────────────
 # Remove or leave empty to disable CalDAV globally.

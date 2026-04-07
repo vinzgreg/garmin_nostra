@@ -362,6 +362,8 @@ Create the bot account on your preferred instance, go to **Preferences → Devel
 | `mastodon_max_age_days` | *(unset)* | Skip Mastodon posts for activities older than N days (avoids rate limits on backfill) |
 | `mastodon_post_delay_s` | `2.0` | Seconds to wait between consecutive Mastodon posts (avoids rate limits) |
 | `request_timeout_s` | `30` | Timeout in seconds for all external HTTP calls |
+| `pause_start` | *(unset)* | Pause sync after this local time (`HH:MM`); requires `pause_end` |
+| `pause_end` | *(unset)* | Resume sync at this local time (`HH:MM`); requires `pause_start` |
 
 ### `[storage]`
 
