@@ -31,6 +31,7 @@ import time
 from pathlib import Path
 
 import requests
+from urllib.parse import urlencode
 
 try:
     import tomllib
@@ -188,9 +189,8 @@ def _bootstrap_user(username: str, password: str, token_dir: Path) -> None:
         page.on("response", on_response)
 
         signin_full_url = (
-            f"{SIGNIN_URL}"
-            f"?clientId={PORTAL_SSO_CLIENT_ID}"
-            f"&service={PORTAL_SSO_SERVICE_URL}"
+            f"{SIGNIN_URL}?"
+            + urlencode({"clientId": PORTAL_SSO_CLIENT_ID, "service": PORTAL_SSO_SERVICE_URL})
         )
         print(f"Opening browser: {signin_full_url}")
         page.goto(signin_full_url)
