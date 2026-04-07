@@ -246,18 +246,24 @@ def _bootstrap_user(username: str, password: str, token_dir: Path) -> None:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    config_path = (
-        sys.argv[1]
-        if len(sys.argv) > 1
-        else os.environ.get("CONFIG_FILE", "config.toml")
-    )
+    import argparse
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("config", nargs="?", default=os.environ.get("CONFIG_FILE", "config.toml"),
+                        help="Path to config.toml (default: CONFIG_FILE env var or config.toml)")
+    parser.add_argument("--token-dir", metavar="DIR",
+                        help="Override token directory from config (useful when running on host "
+                             "where Docker paths differ, e.g. ~/data/garminnostra/tokens)")
+    args = parser.parse_args()
+    config_path = args.config
 
     if not Path(config_path).exists():
         print(f"ERROR: Config file not found: {config_path}")
         sys.exit(1)
 
     cfg = _load_config(config_path)
-    token_dir = Path(cfg.get("storage", {}).get("token_dir", "/data/tokens"))
+    token_dir = Path(
+        args.token_dir or cfg.get("storage", {}).get("token_dir", "/data/tokens")
+    ).expanduser()
     users = cfg.get("users", [])
 
     garmin_users = [
