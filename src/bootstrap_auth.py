@@ -48,6 +48,12 @@ except ImportError:
     print("ERROR: playwright not installed. Run: pip install playwright && playwright install chromium")
     sys.exit(1)
 
+try:
+    from playwright_stealth import stealth_sync
+    _STEALTH_AVAILABLE = True
+except ImportError:
+    _STEALTH_AVAILABLE = False
+
 
 # ---------------------------------------------------------------------------
 # Constants mirrored from garminconnect/client.py — must stay in sync
@@ -164,9 +170,17 @@ def _bootstrap_user(username: str, password: str, token_dir: Path) -> None:
     ticket_holder: dict[str, str] = {}
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=False)
+        browser = p.chromium.launch(
+            headless=False,
+            args=["--disable-blink-features=AutomationControlled"],
+        )
         context = browser.new_context()
         page = context.new_page()
+        if _STEALTH_AVAILABLE:
+            stealth_sync(page)
+        else:
+            print("WARNING: playwright-stealth not installed — Cloudflare may detect automation. "
+                  "Run: pip install playwright-stealth")
 
         def on_response(response):
             """Capture serviceTicketId from any SSO login API response."""
