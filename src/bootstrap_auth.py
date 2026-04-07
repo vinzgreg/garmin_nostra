@@ -189,7 +189,7 @@ class _TicketHandler(BaseHTTPRequestHandler):
 # Per-user browser bootstrap
 # ---------------------------------------------------------------------------
 
-def _bootstrap_user(username: str, token_dir: Path) -> None:
+def _bootstrap_user(username: str, token_dir: Path, browser_name: str | None = None) -> None:
     print(f"\n--- Bootstrapping {username} ---")
 
     # Build the SSO URL that redirects back to our local server after login.
@@ -216,7 +216,14 @@ def _bootstrap_user(username: str, token_dir: Path) -> None:
         f"and paste it here (it will contain ?ticket=ST-xxxxx).\n"
     )
     print(f"Opening: {sso_url}")
-    webbrowser.open(sso_url)
+    if browser_name:
+        try:
+            webbrowser.get(browser_name).open(sso_url)
+        except webbrowser.Error:
+            print(f"WARNING: Could not open '{browser_name}'. Falling back to default browser.")
+            webbrowser.open(sso_url)
+    else:
+        webbrowser.open(sso_url)
 
     # Wait for the user to paste the redirect URL
     ticket = None
@@ -275,6 +282,11 @@ def main() -> None:
         help="Override token directory from config (useful when running on host "
              "where Docker paths differ, e.g. ~/data/garminnostra/tokens)",
     )
+    parser.add_argument(
+        "--browser", metavar="NAME",
+        help="Browser to open (e.g. 'firefox', 'chromium-browser'). "
+             "Default: system default browser.",
+    )
     args = parser.parse_args()
     config_path = args.config
 
@@ -307,6 +319,7 @@ def main() -> None:
             _bootstrap_user(
                 username=user["garmin_username"],
                 token_dir=user_token_dir,
+                browser_name=args.browser,
             )
         except Exception as e:
             print(f"ERROR bootstrapping {name}: {e}")
