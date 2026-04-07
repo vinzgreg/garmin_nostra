@@ -23,7 +23,7 @@ docker compose down
 ```bash
 python3 -m venv /tmp/playwright-bootstrap
 source /tmp/playwright-bootstrap/bin/activate
-pip install playwright playwright-stealth requests
+pip install playwright requests
 playwright install chromium
 ```
 

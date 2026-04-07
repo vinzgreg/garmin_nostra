@@ -48,11 +48,6 @@ except ImportError:
     print("ERROR: playwright not installed. Run: pip install playwright && playwright install chromium")
     sys.exit(1)
 
-try:
-    from playwright_stealth import stealth_sync
-    _STEALTH_AVAILABLE = True
-except ImportError:
-    _STEALTH_AVAILABLE = False
 
 
 # ---------------------------------------------------------------------------
@@ -174,13 +169,22 @@ def _bootstrap_user(username: str, password: str, token_dir: Path) -> None:
             headless=False,
             args=["--disable-blink-features=AutomationControlled"],
         )
-        context = browser.new_context()
+        context = browser.new_context(
+            user_agent=(
+                "Mozilla/5.0 (X11; Linux x86_64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/131.0.0.0 Safari/537.36"
+            )
+        )
         page = context.new_page()
-        if _STEALTH_AVAILABLE:
-            stealth_sync(page)
-        else:
-            print("WARNING: playwright-stealth not installed — Cloudflare may detect automation. "
-                  "Run: pip install playwright-stealth")
+        # Patch navigator.webdriver and other bot-detection signals before any
+        # page script runs — no third-party stealth library required.
+        page.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+            Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3] });
+            Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+            window.chrome = { runtime: {} };
+        """)
 
         def on_response(response):
             """Capture serviceTicketId from any SSO login API response."""
