@@ -93,6 +93,60 @@ On first start the container runs an immediate sync, then loops at the configure
 
 ---
 
+## Garmin token bootstrap
+
+Since late March 2026 Garmin's SSO is protected by Cloudflare, which blocks programmatic logins and returns 429 errors. The sync service uses `garminconnect >=0.3.0` with `curl_cffi` for TLS impersonation, which usually works. If it doesn't (e.g. after repeated 429s have rate-limited your account/IP), you need to bootstrap tokens once using your real browser.
+
+After bootstrapping, the sync service uses the saved tokens and never touches Garmin SSO again — tokens refresh automatically for up to a year.
+
+### When to run this
+
+- **First-time setup** of a new Garmin user
+- After a **prolonged 429 rate-limit** that blocks programmatic login
+- If `garmin_tokens.json` was deleted or became invalid
+
+### Steps
+
+```bash
+# 1. Create a temporary venv (the bootstrap script runs on the host, not in Docker)
+python3 -m venv /tmp/garmin-bootstrap
+source /tmp/garmin-bootstrap/bin/activate
+pip install requests
+
+# 2. Run the bootstrap script
+python3 src/bootstrap_auth.py config.toml --token-dir ~/data/garminnostra/tokens
+
+# Optionally specify a browser (default: system default):
+python3 src/bootstrap_auth.py config.toml --token-dir ~/data/garminnostra/tokens --browser firefox
+```
+
+For each Garmin user the script opens a browser to the Garmin SSO login page.
+
+**Before logging in:**
+1. Press **F12** to open DevTools, go to the **Console** tab
+2. Paste and run: `window.addEventListener('beforeunload', function(e) { e.preventDefault(); e.returnValue = ''; });`
+3. Log in normally (complete any CAPTCHA or MFA)
+4. A **"Leave this page?"** dialog appears — click **Stay on Page**
+5. Switch to the **Network** tab, filter by `login`
+6. Click the `/portal/api/login` request, go to the **Response** tab
+7. Copy the `serviceTicketId` value (`ST-xxxxx`)
+8. Paste it into the terminal
+
+```bash
+# 3. Rebuild and restart the container
+docker compose build --no-cache && docker compose up -d
+
+# 4. Clean up
+deactivate
+rm -rf /tmp/garmin-bootstrap
+```
+
+Tokens are saved to `~/data/garminnostra/tokens/<username>/garmin_tokens.json` (permissions `0600`).
+
+See [Garmin-Connect_paywright-bypass.md](Garmin-Connect_paywright-bypass.md) for more detail.
+
+---
+
 ## Wahoo setup
 
 To sync activities from a Wahoo account you need a Wahoo developer app and an OAuth refresh token. This is a one-time setup per user.
