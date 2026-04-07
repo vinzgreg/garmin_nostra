@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from garminconnect import Garmin, GarminConnectAuthenticationError, GarminConnectTooManyRequestsError
+from garminconnect import Garmin, GarminConnectAuthenticationError, GarminConnectConnectionError, GarminConnectTooManyRequestsError
 
 logger = logging.getLogger(__name__)
 
@@ -85,11 +85,26 @@ class GarminClient:
                 f"will retry after {backoff_until.isoformat()}."
             )
 
+        # Step 1: Try loading saved tokens WITHOUT credentials.
+        # This avoids triggering a credential login (which hits Garmin SSO
+        # and may be blocked by Cloudflare) when valid tokens exist on disk.
+        if self._tokenstore:
+            try:
+                client = Garmin()
+                client.login(self._tokenstore)
+                _clear_backoff(self._tokenstore)
+                logger.info("Authenticated via saved tokens for %s.", self._username)
+                self._client = client
+                return
+            except (GarminConnectAuthenticationError, GarminConnectConnectionError):
+                logger.info("No valid saved tokens for %s — credential login required.", self._username)
+
+        # Step 2: Credential login (only when tokens are missing or invalid).
         try:
-            client = Garmin(self._username, self._password)
+            client = Garmin(email=self._username, password=self._password)
             client.login(self._tokenstore)
             _clear_backoff(self._tokenstore)
-            logger.info("Authenticated for %s (token store: %s).",
+            logger.info("Authenticated with credentials for %s (tokens saved to %s).",
                          self._username, self._tokenstore or "none")
             self._client = client
         except GarminConnectTooManyRequestsError:
