@@ -211,9 +211,15 @@ def _bootstrap_user(username: str, token_dir: Path, browser_name: str | None = N
 
     print(
         f"\nPlease log in as {username} in the browser window that opens.\n"
-        f"After login, Garmin will redirect to connect.garmin.com.\n"
-        f"Copy the FULL URL from the browser address bar after the redirect\n"
-        f"and paste it here (it will contain ?ticket=ST-xxxxx).\n"
+        f"\n"
+        f"BEFORE you log in:\n"
+        f"  1. Press F12 to open DevTools\n"
+        f"  2. Go to the Network tab\n"
+        f"  3. Type 'login' in the filter box\n"
+        f"  4. Now log in normally (complete CAPTCHA/MFA if needed)\n"
+        f"  5. Look for a request to 'login' (POST to sso.garmin.com/portal/api/login)\n"
+        f"  6. Click it, go to the Response tab\n"
+        f"  7. Find \"serviceTicketId\" and copy the ST-xxxxx value\n"
     )
     print(f"Opening: {sso_url}")
     if browser_name:
@@ -225,22 +231,29 @@ def _bootstrap_user(username: str, token_dir: Path, browser_name: str | None = N
     else:
         webbrowser.open(sso_url)
 
-    # Wait for the user to paste the redirect URL
+    # Wait for the user to paste the ticket
     ticket = None
     while not ticket:
-        raw = input("\nPaste the redirect URL (or just the ticket value ST-...): ").strip()
+        raw = input("\nPaste the serviceTicketId value (ST-...): ").strip()
         if not raw:
             continue
+        # Accept the raw ticket value, a URL with ?ticket=, or a JSON snippet
         if raw.startswith("ST-"):
             ticket = raw
-        else:
+        elif "ticket=" in raw:
             parsed = urlparse(raw)
             params = parse_qs(parsed.query)
             tickets = params.get("ticket", [])
             if tickets:
                 ticket = tickets[0]
-            else:
-                print("Could not find ?ticket= in that URL. Try again.")
+        elif "serviceTicketId" in raw:
+            # User may have pasted a JSON fragment
+            import re
+            match = re.search(r'"serviceTicketId"\s*:\s*"(ST-[^"]+)"', raw)
+            if match:
+                ticket = match.group(1)
+        if not ticket:
+            print("Could not find a service ticket (ST-...) in that input. Try again.")
 
     print(f"Service ticket captured. Exchanging for DI tokens …")
 
