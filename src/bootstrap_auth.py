@@ -172,13 +172,12 @@ def _bootstrap_user(username: str, password: str, token_dir: Path) -> None:
             """Capture serviceTicketId from any SSO login API response."""
             if ticket_holder.get("ticket"):
                 return
-            if LOGIN_API_URL not in response.url:
+            if "sso.garmin.com" not in response.url:
                 return
             try:
                 data = response.json()
                 ticket = (
                     data.get("serviceTicketId")
-                    # MFA completion responses nest the ticket here too
                     or data.get("data", {}).get("serviceTicketId")
                 )
                 if ticket:
@@ -188,12 +187,11 @@ def _bootstrap_user(username: str, password: str, token_dir: Path) -> None:
 
         page.on("response", on_response)
 
-        signin_full_url = (
-            f"{SIGNIN_URL}?"
-            + urlencode({"clientId": PORTAL_SSO_CLIENT_ID, "service": PORTAL_SSO_SERVICE_URL})
-        )
-        print(f"Opening browser: {signin_full_url}")
-        page.goto(signin_full_url)
+        # Navigate to the main Connect URL and let Garmin redirect to SSO
+        # naturally — going directly to the SSO URL with custom parameters
+        # triggers Garmin's session validation and causes an error.
+        print("Opening browser: https://connect.garmin.com")
+        page.goto("https://connect.garmin.com")
 
         # Auto-fill credentials using locator API which dispatches proper input
         # events required to enable React/Vue-controlled submit buttons.
