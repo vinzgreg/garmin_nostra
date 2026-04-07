@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from garminconnect import Garmin, GarminConnectAuthenticationError
+from garminconnect import Garmin, GarminConnectAuthenticationError, GarminConnectTooManyRequestsError
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +17,7 @@ class GarminRateLimitError(Exception):
 
 
 # How long to wait before retrying a credential login after a 429 response.
-_RATE_LIMIT_BACKOFF_HOURS = 24
+_RATE_LIMIT_BACKOFF_HOURS = 2
 
 
 def _backoff_path(tokenstore: str | None) -> Path | None:
@@ -72,61 +72,34 @@ class GarminClient:
         self._username   = username
         self._password   = password
         self._tokenstore = str(tokenstore) if tokenstore else None
-        self._timeout    = timeout
         self._client: Garmin | None = None
-
-    def _apply_timeout(self, client: Garmin) -> None:
-        """Set the garth request timeout on *client* if the API allows it."""
-        try:
-            client.garth.configure(timeout=self._timeout)
-        except Exception:
-            try:
-                client.garth.timeout = self._timeout
-            except Exception:
-                pass
 
     def connect(self) -> None:
         logger.info("Connecting to Garmin Connect for %s …", self._username)
         self._client = None
+
+        backoff_until = _read_backoff_until(self._tokenstore)
+        if backoff_until is not None and datetime.now(timezone.utc) < backoff_until:
+            raise GarminRateLimitError(
+                f"Garmin SSO is rate-limiting {self._username} — "
+                f"will retry after {backoff_until.isoformat()}."
+            )
+
         try:
             client = Garmin(self._username, self._password)
-            try:
-                client.login(self._tokenstore)
-                self._apply_timeout(client)
-                logger.info("Authenticated (token store: %s).", self._tokenstore or "none")
-            except GarminConnectAuthenticationError as exc:
-                raise RuntimeError(
-                    f"Garmin authentication failed for {self._username}: {exc}"
-                ) from exc
-            except Exception as exc:
-                logger.warning("Token login failed (%s) — retrying with credentials.", exc)
-                backoff_until = _read_backoff_until(self._tokenstore)
-                if backoff_until is not None and datetime.now(timezone.utc) < backoff_until:
-                    raise GarminRateLimitError(
-                        f"Garmin SSO is rate-limiting {self._username} — "
-                        f"will retry after {backoff_until.isoformat()}."
-                    ) from None
-                try:
-                    client = Garmin(self._username, self._password)
-                    client.login()
-                except Exception as login_exc:
-                    if "429" in str(login_exc):
-                        _write_backoff(self._tokenstore)
-                        raise GarminRateLimitError(
-                            f"Garmin SSO returned 429 for {self._username} — "
-                            f"credential login blocked for {_RATE_LIMIT_BACKOFF_HOURS}h."
-                        ) from None
-                    raise
-                self._apply_timeout(client)
-                _clear_backoff(self._tokenstore)
-                if self._tokenstore:
-                    Path(self._tokenstore).mkdir(parents=True, exist_ok=True)
-                    try:
-                        client.garth.dump(self._tokenstore)
-                    except Exception as dump_exc:
-                        logger.warning("Could not save tokens to %s: %s", self._tokenstore, dump_exc)
-                logger.info("Authenticated with credentials.")
+            client.login(self._tokenstore)
+            _clear_backoff(self._tokenstore)
+            logger.info("Authenticated for %s (token store: %s).",
+                         self._username, self._tokenstore or "none")
             self._client = client
+        except GarminConnectTooManyRequestsError:
+            _write_backoff(self._tokenstore)
+            raise GarminRateLimitError(
+                f"Garmin SSO returned 429 for {self._username} — "
+                f"credential login blocked for {_RATE_LIMIT_BACKOFF_HOURS}h."
+            ) from None
+        except GarminConnectAuthenticationError:
+            raise
         except Exception:
             self._client = None
             raise
