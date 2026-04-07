@@ -1,14 +1,16 @@
-# Garmin Connect — Playwright Bootstrap (Cloudflare bypass)
+# Garmin Connect — Browser Bootstrap (Cloudflare bypass)
 
 Use this when the normal programmatic login is blocked by Cloudflare (429 errors).
-The script opens a real Chromium browser, auto-fills credentials, and lets you handle
-any CAPTCHA or MFA manually. It then exchanges the session ticket for DI OAuth tokens
-and writes `garmin_tokens.json` so the sync service can authenticate without hitting
-SSO again.
+The script opens Garmin's login page in your real browser (Firefox, Chrome, etc.),
+you log in normally, then paste the redirect URL back into the script. It exchanges
+the service ticket for DI OAuth tokens and writes `garmin_tokens.json` so the sync
+service can authenticate without hitting SSO again.
 
 ## Prerequisites
 
-Run on the **host machine** (not inside the Docker container — it needs a display).
+Run on the **host machine** (not inside the Docker container).
+
+Only needs `requests` (no Playwright, no extra browsers).
 
 ## Steps
 
@@ -18,13 +20,12 @@ Run on the **host machine** (not inside the Docker container — it needs a disp
 docker compose down
 ```
 
-### 2. Create a temporary venv and install dependencies
+### 2. Create a temporary venv
 
 ```bash
-python3 -m venv /tmp/playwright-bootstrap
-source /tmp/playwright-bootstrap/bin/activate
-pip install playwright requests
-playwright install chromium
+python3 -m venv /tmp/garmin-bootstrap
+source /tmp/garmin-bootstrap/bin/activate
+pip install requests
 ```
 
 ### 3. Run the bootstrap script
@@ -33,9 +34,14 @@ playwright install chromium
 python3 src/bootstrap_auth.py config.toml --token-dir ~/data/garminnostra/tokens
 ```
 
-A browser window opens for each Garmin user in your config. Credentials are
-auto-filled. Complete any CAPTCHA or MFA that appears — the script waits up to
-5 minutes per user.
+For each Garmin user in your config:
+1. Your default browser opens the Garmin SSO login page
+2. Log in normally (handle CAPTCHA/MFA as usual)
+3. After login, Garmin redirects to `https://connect.garmin.com/app?ticket=ST-xxxxx`
+4. Copy the **full URL** from the browser address bar
+5. Paste it into the terminal when prompted
+
+The script extracts the ticket and exchanges it for DI tokens.
 
 ### 4. Restart the container
 
@@ -50,14 +56,13 @@ login attempt.
 
 ```bash
 deactivate
-rm -rf /tmp/playwright-bootstrap
+rm -rf /tmp/garmin-bootstrap
 ```
 
 ## Notes
 
 - Tokens are saved to `~/data/garminnostra/tokens/<username>/garmin_tokens.json`
   with permissions `600` (owner read/write only).
-- Once tokens exist, the sync service never touches Garmin SSO — it refreshes
-  tokens transparently until the refresh token expires (up to ~1 year).
+- Once tokens exist, the sync service refreshes tokens transparently until the
+  refresh token expires (up to ~1 year).
 - If you add a new user to `config.toml` later, re-run the bootstrap script.
-  It will only open a browser for users that don't already have a valid token file.

@@ -1,21 +1,19 @@
 """
-One-time Garmin DI token bootstrap using Playwright browser automation.
+One-time Garmin DI token bootstrap using your real browser.
 
 Use this when the normal programmatic login is blocked by Cloudflare (429).
-A real Chromium browser window opens for each Garmin user, credentials are
-auto-filled, and you can handle any CAPTCHA or MFA that appears. Once login
-succeeds the script exchanges the SSO service ticket for DI OAuth tokens and
-writes garmin_tokens.json to the configured token directory.  The main sync
-service then picks those up on the next run without ever hitting SSO again.
+The script starts a tiny local HTTP server, opens Garmin Connect in your
+default browser, and intercepts the SSO service ticket from the redirect.
+It then exchanges the ticket for DI OAuth tokens and writes garmin_tokens.json
+so the sync service can authenticate without ever hitting SSO again.
 
 Requirements (install once on the host — NOT in the Docker container):
 
-    pip install playwright requests
-    playwright install chromium
+    pip install requests
 
 Usage:
 
-    python3 src/bootstrap_auth.py [path/to/config.toml]
+    python3 src/bootstrap_auth.py [path/to/config.toml] [--token-dir DIR]
 
 If no path is given the script looks for CONFIG_FILE env var, then
 config.toml in the current working directory.
@@ -27,11 +25,13 @@ import base64
 import json
 import os
 import sys
-import time
+import threading
+import webbrowser
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
+from urllib.parse import urlencode, urlparse, parse_qs
 
 import requests
-from urllib.parse import urlencode
 
 try:
     import tomllib
@@ -42,22 +42,13 @@ except ImportError:
         print("ERROR: tomllib / tomli not available. Install with: pip install tomli")
         sys.exit(1)
 
-try:
-    from playwright.sync_api import sync_playwright
-except ImportError:
-    print("ERROR: playwright not installed. Run: pip install playwright && playwright install chromium")
-    sys.exit(1)
-
-
 
 # ---------------------------------------------------------------------------
 # Constants mirrored from garminconnect/client.py — must stay in sync
 # ---------------------------------------------------------------------------
 
 PORTAL_SSO_CLIENT_ID   = "GarminConnect"
-PORTAL_SSO_SERVICE_URL = "https://connect.garmin.com/app"
 SIGNIN_URL             = "https://sso.garmin.com/portal/sso/en-US/sign-in"
-LOGIN_API_URL          = "https://sso.garmin.com/portal/api/login"
 DI_TOKEN_URL           = "https://diauth.garmin.com/di-oauth2-service/oauth/token"
 DI_GRANT_TYPE          = (
     "https://connectapi.garmin.com/di-oauth2-service/oauth/grant/service_ticket"
@@ -71,6 +62,10 @@ NATIVE_USER_AGENT = (
     "com.garmin.android.apps.connectmobile/5.23; ; Google/sdk_gphone64_arm64/google; "
     "Android/33; Dalvik/2.1.0"
 )
+
+# The local redirect server. Garmin SSO redirects here with the ticket.
+REDIRECT_PORT = 8765
+REDIRECT_URI = f"http://localhost:{REDIRECT_PORT}/callback"
 
 
 # ---------------------------------------------------------------------------
@@ -107,12 +102,8 @@ def _basic_auth(client_id: str) -> str:
     return "Basic " + base64.b64encode(f"{client_id}:".encode()).decode()
 
 
-def _exchange_ticket(ticket: str) -> tuple[str, str | None, str]:
-    """Exchange a CAS service ticket for DI OAuth tokens.
-
-    Tries each known client ID in order, returns (access_token, refresh_token,
-    client_id) on the first success.
-    """
+def _exchange_ticket(ticket: str, service_url: str) -> tuple[str, str | None, str]:
+    """Exchange a CAS service ticket for DI OAuth tokens."""
     last_err = None
     for client_id in DI_CLIENT_IDS:
         try:
@@ -129,7 +120,7 @@ def _exchange_ticket(ticket: str) -> tuple[str, str | None, str]:
                     "client_id": client_id,
                     "service_ticket": ticket,
                     "grant_type": DI_GRANT_TYPE,
-                    "service_url": PORTAL_SSO_SERVICE_URL,
+                    "service_url": service_url,
                 },
                 timeout=30,
             )
@@ -156,96 +147,100 @@ def _exchange_ticket(ticket: str) -> tuple[str, str | None, str]:
 
 
 # ---------------------------------------------------------------------------
+# Local HTTP server to capture the SSO redirect
+# ---------------------------------------------------------------------------
+
+class _TicketHandler(BaseHTTPRequestHandler):
+    """Handles the redirect from Garmin SSO, extracts the service ticket."""
+
+    ticket: str | None = None
+    error: str | None = None
+
+    def do_GET(self):
+        parsed = urlparse(self.path)
+        params = parse_qs(parsed.query)
+        ticket = params.get("ticket", [None])[0]
+
+        if ticket:
+            _TicketHandler.ticket = ticket
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(
+                b"<html><body><h2>Login successful!</h2>"
+                b"<p>You can close this tab. The bootstrap script is exchanging "
+                b"tokens&hellip;</p></body></html>"
+            )
+        else:
+            _TicketHandler.error = f"No ticket in redirect: {self.path}"
+            self.send_response(400)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(
+                b"<html><body><h2>Error</h2>"
+                b"<p>No service ticket found in the redirect URL.</p></body></html>"
+            )
+
+    def log_message(self, format, *args):
+        pass  # suppress request logging
+
+
+# ---------------------------------------------------------------------------
 # Per-user browser bootstrap
 # ---------------------------------------------------------------------------
 
-def _bootstrap_user(username: str, password: str, token_dir: Path) -> None:
+def _bootstrap_user(username: str, token_dir: Path) -> None:
     print(f"\n--- Bootstrapping {username} ---")
 
-    ticket_holder: dict[str, str] = {}
+    # Build the SSO URL that redirects back to our local server after login.
+    # The service URL must be one that Garmin's SSO accepts.
+    # We use the standard connect.garmin.com/app as the service URL since that's
+    # what the official login flow uses. After SSO validates the ticket, the
+    # browser is redirected to this URL with ?ticket=ST-xxxxx appended.
+    service_url = "https://connect.garmin.com/app"
+    sso_url = (
+        f"{SIGNIN_URL}?"
+        + urlencode({
+            "clientId": PORTAL_SSO_CLIENT_ID,
+            "service": service_url,
+        })
+    )
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch(
-            headless=False,
-            args=["--disable-blink-features=AutomationControlled"],
-        )
-        context = browser.new_context(
-            user_agent=(
-                "Mozilla/5.0 (X11; Linux x86_64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/131.0.0.0 Safari/537.36"
-            )
-        )
-        page = context.new_page()
-        # Patch navigator.webdriver and other bot-detection signals before any
-        # page script runs — no third-party stealth library required.
-        page.add_init_script("""
-            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-            Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3] });
-            Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
-            window.chrome = { runtime: {} };
-        """)
+    _TicketHandler.ticket = None
+    _TicketHandler.error = None
 
-        def on_response(response):
-            """Capture serviceTicketId from any SSO login API response."""
-            if ticket_holder.get("ticket"):
-                return
-            if "sso.garmin.com" not in response.url:
-                return
-            try:
-                data = response.json()
-                ticket = (
-                    data.get("serviceTicketId")
-                    or data.get("data", {}).get("serviceTicketId")
-                )
-                if ticket:
-                    ticket_holder["ticket"] = ticket
-            except Exception:
-                pass
+    print(
+        f"\nPlease log in as {username} in the browser window that opens.\n"
+        f"After login, Garmin will redirect to connect.garmin.com.\n"
+        f"Copy the FULL URL from the browser address bar after the redirect\n"
+        f"and paste it here (it will contain ?ticket=ST-xxxxx).\n"
+    )
+    print(f"Opening: {sso_url}")
+    webbrowser.open(sso_url)
 
-        page.on("response", on_response)
+    # Wait for the user to paste the redirect URL
+    ticket = None
+    while not ticket:
+        raw = input("\nPaste the redirect URL (or just the ticket value ST-...): ").strip()
+        if not raw:
+            continue
+        if raw.startswith("ST-"):
+            ticket = raw
+        else:
+            parsed = urlparse(raw)
+            params = parse_qs(parsed.query)
+            tickets = params.get("ticket", [])
+            if tickets:
+                ticket = tickets[0]
+            else:
+                print("Could not find ?ticket= in that URL. Try again.")
 
-        # Navigate to the main Connect URL and let Garmin redirect to SSO
-        # naturally — going directly to the SSO URL with custom parameters
-        # triggers Garmin's session validation and causes an error.
-        print("Opening browser: https://connect.garmin.com")
-        page.goto("https://connect.garmin.com")
-
-        # Auto-fill credentials using locator API which dispatches proper input
-        # events required to enable React/Vue-controlled submit buttons.
-        try:
-            username_loc = page.locator("input[name='username'], input[type='email']")
-            username_loc.wait_for(timeout=10_000)
-            username_loc.fill(username)
-            page.locator("input[name='password'], input[type='password']").fill(password)
-            # Wait for the submit button to become enabled after field events fire
-            submit = page.locator("button[type='submit']")
-            submit.wait_for(state="enabled", timeout=5_000)
-            submit.click()
-            print("Credentials filled. Complete any CAPTCHA or MFA in the browser window …")
-        except Exception as e:
-            print(f"Could not auto-fill or submit form ({e}). Please log in manually in the browser.")
-
-        # Wait up to 5 minutes for the service ticket
-        deadline = time.monotonic() + 300
-        while not ticket_holder.get("ticket"):
-            if time.monotonic() > deadline:
-                browser.close()
-                raise TimeoutError(
-                    f"Timed out waiting for service ticket for {username}. "
-                    "Make sure the login completed successfully."
-                )
-            time.sleep(0.5)
-
-        browser.close()
-
-    ticket = ticket_holder["ticket"]
     print(f"Service ticket captured. Exchanging for DI tokens …")
 
-    access_token, refresh_token, client_id = _exchange_ticket(ticket)
+    access_token, refresh_token, client_id = _exchange_ticket(ticket, service_url)
 
     token_dir.mkdir(parents=True, exist_ok=True)
-    if hasattr(os, "chmod"):
+    if sys.platform != "win32":
         token_dir.chmod(0o700)
     token_file = token_dir / "garmin_tokens.json"
     token_file.write_text(
@@ -255,7 +250,7 @@ def _bootstrap_user(username: str, password: str, token_dir: Path) -> None:
             "di_client_id": client_id,
         })
     )
-    if hasattr(os, "chmod"):
+    if sys.platform != "win32":
         token_file.chmod(0o600)
     print(f"Tokens saved to {token_file}")
 
@@ -266,12 +261,20 @@ def _bootstrap_user(username: str, password: str, token_dir: Path) -> None:
 
 def main() -> None:
     import argparse
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("config", nargs="?", default=os.environ.get("CONFIG_FILE", "config.toml"),
-                        help="Path to config.toml (default: CONFIG_FILE env var or config.toml)")
-    parser.add_argument("--token-dir", metavar="DIR",
-                        help="Override token directory from config (useful when running on host "
-                             "where Docker paths differ, e.g. ~/data/garminnostra/tokens)")
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "config", nargs="?",
+        default=os.environ.get("CONFIG_FILE", "config.toml"),
+        help="Path to config.toml (default: CONFIG_FILE env var or config.toml)",
+    )
+    parser.add_argument(
+        "--token-dir", metavar="DIR",
+        help="Override token directory from config (useful when running on host "
+             "where Docker paths differ, e.g. ~/data/garminnostra/tokens)",
+    )
     args = parser.parse_args()
     config_path = args.config
 
@@ -303,7 +306,6 @@ def main() -> None:
         try:
             _bootstrap_user(
                 username=user["garmin_username"],
-                password=user["garmin_password"],
                 token_dir=user_token_dir,
             )
         except Exception as e:
