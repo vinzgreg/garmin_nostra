@@ -30,31 +30,16 @@ pip install requests
 
 ### 3. Run the bootstrap script
 
-**Standalone (one user, no config.toml needed):**
+Run once per Garmin user:
 
 ```bash
 python3 src/bootstrap_auth.py -o ~/data/garminnostra/tokens/betty
-```
 
-**Multi-user via config.toml:**
-
-```bash
-python3 src/bootstrap_auth.py --config config.toml --token-dir ~/data/garminnostra/tokens
-```
-
-**Single user from config:**
-
-```bash
-python3 src/bootstrap_auth.py --config config.toml --token-dir ~/data/garminnostra/tokens --user betty
-```
-
-**Use a specific browser:**
-
-```bash
+# Optionally specify a browser (default: system default):
 python3 src/bootstrap_auth.py -o ~/data/garminnostra/tokens/betty --browser firefox
 ```
 
-For each user:
+The script opens a browser:
 
 1. Your browser opens the Garmin SSO login page
 2. **Before logging in**, press **F12** → Console tab

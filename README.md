@@ -82,45 +82,18 @@ The container runs as non-root user `appuser` (UID 1000). If your host user has 
 sudo chown -R 1000:1000 ~/data/garminnostra
 ```
 
-### 3. Build and start
+### 3. Bootstrap Garmin tokens
+
+Garmin's SSO is protected by Cloudflare and blocks programmatic logins. You need to bootstrap OAuth tokens once per Garmin user using your real browser. After that, tokens refresh automatically for up to a year.
 
 ```bash
-docker compose up -d --build
-docker compose logs -f
-```
-
-On first start the container runs an immediate sync, then loops at the configured `interval_minutes`.
-
----
-
-## Garmin token bootstrap
-
-Since late March 2026 Garmin's SSO is protected by Cloudflare, which blocks programmatic logins and returns 429 errors. The sync service uses `garminconnect >=0.3.0` with `curl_cffi` for TLS impersonation, which usually works. If it doesn't (e.g. after repeated 429s have rate-limited your account/IP), you need to bootstrap tokens once using your real browser.
-
-After bootstrapping, the sync service uses the saved tokens and never touches Garmin SSO again — tokens refresh automatically for up to a year.
-
-### When to run this
-
-- **First-time setup** of a new Garmin user
-- After a **prolonged 429 rate-limit** that blocks programmatic login
-- If `garmin_tokens.json` was deleted or became invalid
-
-### Steps
-
-```bash
-# 1. Create a temporary venv (the bootstrap script runs on the host, not in Docker)
+# Create a temporary venv (runs on the host, not in Docker)
 python3 -m venv /tmp/garmin-bootstrap
 source /tmp/garmin-bootstrap/bin/activate
 pip install requests
 
-# 2. Run the bootstrap script — standalone (one user, no config.toml needed):
+# Run once per Garmin user — replace 'betty' with the user's name from config.toml:
 python3 src/bootstrap_auth.py -o ~/data/garminnostra/tokens/betty
-
-# Or multi-user via config.toml:
-python3 src/bootstrap_auth.py --config config.toml --token-dir ~/data/garminnostra/tokens
-
-# Bootstrap a single user from config:
-python3 src/bootstrap_auth.py --config config.toml --token-dir ~/data/garminnostra/tokens --user betty
 
 # Optionally specify a browser (default: system default):
 python3 src/bootstrap_auth.py -o ~/data/garminnostra/tokens/betty --browser firefox
@@ -139,18 +112,24 @@ The script opens a browser to the Garmin SSO login page.
 8. Copy the `serviceTicketId` value (`ST-xxxxx`)
 9. Paste it into the terminal
 
-```bash
-# 3. Rebuild and restart the container
-docker compose build --no-cache && docker compose up -d
+Tokens are saved to the output directory as `garmin_tokens.json` (permissions `0600`).
 
-# 4. Clean up
+```bash
+# Clean up the temporary venv
 deactivate
 rm -rf /tmp/garmin-bootstrap
 ```
 
-Tokens are saved to the output directory as `garmin_tokens.json` (permissions `0600`).
+Re-run this step if tokens expire or you add a new Garmin user. See [Garmin-Connect_paywright-bypass.md](Garmin-Connect_paywright-bypass.md) for more detail.
 
-See [Garmin-Connect_paywright-bypass.md](Garmin-Connect_paywright-bypass.md) for more detail.
+### 4. Build and start
+
+```bash
+docker compose up -d --build
+docker compose logs -f
+```
+
+On first start the container runs an immediate sync, then loops at the configured `interval_minutes`.
 
 ---
 
@@ -673,7 +652,7 @@ gpxpy  staticmap  Pillow  requests
 ## Troubleshooting
 
 **Garmin authentication fails (401 / 429)**
-Garmin's SSO is protected by Cloudflare, which can block programmatic logins. Run the browser-based bootstrap to obtain tokens — see [Garmin token bootstrap](#garmin-token-bootstrap) above.
+Garmin's SSO is protected by Cloudflare, which can block programmatic logins. Run the browser-based bootstrap to obtain tokens — see [Bootstrap Garmin tokens](#3-bootstrap-garmin-tokens) above.
 
 If you already have working tokens from a previous installation, you can copy them directly:
 

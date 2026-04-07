@@ -8,22 +8,16 @@ writes garmin_tokens.json.
 
 Requirements: pip install requests
 
-Standalone usage (no config.toml needed):
+Usage:
 
     python3 src/bootstrap_auth.py -o ~/data/garminnostra/tokens/betty
     python3 src/bootstrap_auth.py -o . --browser firefox
-
-Multi-user via config.toml:
-
-    python3 src/bootstrap_auth.py --config config.toml --token-dir ~/data/garminnostra/tokens
-    python3 src/bootstrap_auth.py --config config.toml --token-dir ~/data/garminnostra/tokens --user betty
 """
 
 from __future__ import annotations
 
 import base64
 import json
-import os
 import re
 import sys
 import webbrowser
@@ -214,33 +208,6 @@ def _bootstrap_user(label: str, token_dir: Path,
 
 
 # ---------------------------------------------------------------------------
-# Config-based multi-user mode
-# ---------------------------------------------------------------------------
-
-def _load_config(path: str) -> dict:
-    try:
-        import tomllib
-    except ImportError:
-        import tomli as tomllib  # type: ignore[no-reattr]
-
-    def resolve(obj):
-        if isinstance(obj, str) and obj.startswith("env:"):
-            var = obj[4:]
-            val = os.environ.get(var)
-            if val is None:
-                raise ValueError(f"env:{var} is not set.")
-            return val
-        if isinstance(obj, dict):
-            return {k: resolve(v) for k, v in obj.items()}
-        if isinstance(obj, list):
-            return [resolve(i) for i in obj]
-        return obj
-
-    with open(path, "rb") as f:
-        return resolve(tomllib.load(f))
-
-
-# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -250,31 +217,14 @@ def main() -> None:
         description="Bootstrap Garmin DI OAuth tokens using your real browser.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
-            "Standalone (one user, no config.toml):\n"
+            "Examples:\n"
             "  python3 src/bootstrap_auth.py -o ~/data/garminnostra/tokens/betty\n"
-            "\n"
-            "Multi-user via config.toml:\n"
-            "  python3 src/bootstrap_auth.py --config config.toml --token-dir ~/data/garminnostra/tokens\n"
-            "  python3 src/bootstrap_auth.py --config config.toml --token-dir ~/data/garminnostra/tokens --user betty\n"
+            "  python3 src/bootstrap_auth.py -o . --browser firefox\n"
         ),
     )
     parser.add_argument(
         "-o", "--output", metavar="DIR",
-        help="Output directory for garmin_tokens.json (standalone mode, one user). "
-             "Default: current directory.",
-    )
-    parser.add_argument(
-        "--config", metavar="FILE",
-        help="Path to config.toml (multi-user mode). Reads users and token_dir from config.",
-    )
-    parser.add_argument(
-        "--token-dir", metavar="DIR",
-        help="Override token_dir from config (e.g. ~/data/garminnostra/tokens).",
-    )
-    parser.add_argument(
-        "--user", metavar="NAME",
-        help="Bootstrap only this user (matched against 'name' in config). "
-             "Without this flag, all Garmin users in config are bootstrapped.",
+        help="Output directory for garmin_tokens.json. Default: current directory.",
     )
     parser.add_argument(
         "--browser", metavar="NAME",
@@ -282,70 +232,9 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    # Standalone mode: -o / --output
-    if args.output:
-        output_dir = Path(args.output).expanduser()
-        label = output_dir.name or "Garmin user"
-        _bootstrap_user(label, output_dir, browser_name=args.browser)
-        return
-
-    # Multi-user mode: --config
-    if args.config:
-        if not Path(args.config).exists():
-            print(f"ERROR: Config file not found: {args.config}")
-            sys.exit(1)
-
-        cfg = _load_config(args.config)
-        token_dir = Path(
-            args.token_dir or cfg.get("storage", {}).get("token_dir", "/data/tokens")
-        ).expanduser()
-        users = cfg.get("users", [])
-
-        garmin_users = [
-            u for u in users
-            if u.get("garmin_username") and u.get("garmin_password")
-        ]
-
-        if args.user:
-            garmin_users = [
-                u for u in garmin_users
-                if u.get("name", "").lower() == args.user.lower()
-                or u.get("garmin_username", "").lower() == args.user.lower()
-            ]
-            if not garmin_users:
-                print(f"ERROR: No Garmin user matching '{args.user}' found in config.")
-                sys.exit(1)
-
-        if not garmin_users:
-            print("No users with garmin_username/garmin_password found in config.")
-            sys.exit(0)
-
-        print(f"Found {len(garmin_users)} Garmin user(s) to bootstrap.")
-
-        errors = []
-        for user in garmin_users:
-            name = user.get("name", user["garmin_username"])
-            user_token_dir = token_dir / name
-            try:
-                _bootstrap_user(name, user_token_dir, browser_name=args.browser)
-            except Exception as e:
-                print(f"ERROR bootstrapping {name}: {e}")
-                errors.append(name)
-
-        print()
-        if errors:
-            print(f"Bootstrap failed for: {', '.join(errors)}")
-            sys.exit(1)
-        else:
-            print("All users bootstrapped successfully.")
-            print("Restart the garmin-nostra container to use the new tokens.")
-        return
-
-    # No mode specified — default to standalone with current directory
-    if not args.output and not args.config:
-        output_dir = Path(".").resolve()
-        print(f"No --config or -o specified. Token will be saved to {output_dir}/garmin_tokens.json")
-        _bootstrap_user("Garmin user", output_dir, browser_name=args.browser)
+    output_dir = Path(args.output).expanduser() if args.output else Path(".").resolve()
+    label = output_dir.name or "Garmin user"
+    _bootstrap_user(label, output_dir, browser_name=args.browser)
 
 
 if __name__ == "__main__":
