@@ -209,27 +209,23 @@ def _bootstrap_user(username: str, token_dir: Path, browser_name: str | None = N
     _TicketHandler.ticket = None
     _TicketHandler.error = None
 
-    js_snippet = (
-        "(function(){const f=window.fetch;window.fetch=function(...a){"
-        "return f.apply(this,a).then(async r=>{const u=(a[0]instanceof Request)"
-        "?a[0].url:String(a[0]);if(u.includes('/portal/api/login')||"
-        "u.includes('/api/mfa/verifyCode')){const d=await r.clone().json();"
-        "if(d.serviceTicketId){prompt('Copy this service ticket:',d.serviceTicketId)}}"
-        "return r})};console.log('Interceptor ready. Log in now.')})()"
-    )
+    beforeunload_snippet = "window.addEventListener('beforeunload', function(e) { e.preventDefault(); e.returnValue = ''; });"
     print(
         f"\nPlease log in as {username} in the browser window that opens.\n"
         f"\n"
         f"BEFORE you log in:\n"
         f"  1. Press F12 to open DevTools → Console tab\n"
-        f"  2. Paste the following JavaScript snippet and press Enter:\n"
+        f"  2. Type 'allow pasting' and press Enter (Firefox only, ignore the error)\n"
+        f"  3. Paste the following and press Enter:\n"
         f"\n"
-        f"     {js_snippet}\n"
+        f"     {beforeunload_snippet}\n"
         f"\n"
-        f"  3. You should see 'Interceptor ready. Log in now.' in the console\n"
-        f"  4. Now log in normally (complete CAPTCHA/MFA if needed)\n"
-        f"  5. A prompt dialog will appear with the service ticket — copy it\n"
-        f"  6. Paste the ticket value below\n"
+        f"  4. Log in normally (complete CAPTCHA/MFA if needed)\n"
+        f"  5. A 'Leave this page?' dialog appears — click STAY ON PAGE\n"
+        f"  6. Switch to the Network tab, filter by 'login'\n"
+        f"  7. Click the /portal/api/login request → Response tab\n"
+        f"  8. Copy the serviceTicketId value (ST-xxxxx)\n"
+        f"  9. Paste it below\n"
     )
     print(f"Opening: {sso_url}")
     if browser_name:
