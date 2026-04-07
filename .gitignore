@@ -3,3 +3,6 @@ __pycache__/
 *.pyc
 backfill_gpx.py
 analyze_fit_export.py
+garmin_connect_API_uprade.md
+garmin_nostra.png
+garminnostra_banner.png
