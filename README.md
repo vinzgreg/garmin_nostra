@@ -113,24 +113,31 @@ python3 -m venv /tmp/garmin-bootstrap
 source /tmp/garmin-bootstrap/bin/activate
 pip install requests
 
-# 2. Run the bootstrap script
-python3 src/bootstrap_auth.py config.toml --token-dir ~/data/garminnostra/tokens
+# 2. Run the bootstrap script — standalone (one user, no config.toml needed):
+python3 src/bootstrap_auth.py -o ~/data/garminnostra/tokens/betty
+
+# Or multi-user via config.toml:
+python3 src/bootstrap_auth.py --config config.toml --token-dir ~/data/garminnostra/tokens
+
+# Bootstrap a single user from config:
+python3 src/bootstrap_auth.py --config config.toml --token-dir ~/data/garminnostra/tokens --user betty
 
 # Optionally specify a browser (default: system default):
-python3 src/bootstrap_auth.py config.toml --token-dir ~/data/garminnostra/tokens --browser firefox
+python3 src/bootstrap_auth.py -o ~/data/garminnostra/tokens/betty --browser firefox
 ```
 
-For each Garmin user the script opens a browser to the Garmin SSO login page.
+The script opens a browser to the Garmin SSO login page.
 
 **Before logging in:**
 1. Press **F12** to open DevTools, go to the **Console** tab
-2. Paste and run: `window.addEventListener('beforeunload', function(e) { e.preventDefault(); e.returnValue = ''; });`
-3. Log in normally (complete any CAPTCHA or MFA)
-4. A **"Leave this page?"** dialog appears — click **Stay on Page**
-5. Switch to the **Network** tab, filter by `login`
-6. Click the `/portal/api/login` request, go to the **Response** tab
-7. Copy the `serviceTicketId` value (`ST-xxxxx`)
-8. Paste it into the terminal
+2. In Firefox, type `allow pasting` and press Enter first (ignore the error)
+3. Paste and run: `window.addEventListener('beforeunload', function(e) { e.preventDefault(); e.returnValue = ''; });`
+4. Log in normally (complete any CAPTCHA or MFA)
+5. A **"Leave this page?"** dialog appears — click **Stay on Page**
+6. Switch to the **Network** tab, filter by `login`
+7. Click the `/portal/api/login` request, go to the **Response** tab
+8. Copy the `serviceTicketId` value (`ST-xxxxx`)
+9. Paste it into the terminal
 
 ```bash
 # 3. Rebuild and restart the container
@@ -141,7 +148,7 @@ deactivate
 rm -rf /tmp/garmin-bootstrap
 ```
 
-Tokens are saved to `~/data/garminnostra/tokens/<username>/garmin_tokens.json` (permissions `0600`).
+Tokens are saved to the output directory as `garmin_tokens.json` (permissions `0600`).
 
 See [Garmin-Connect_paywright-bypass.md](Garmin-Connect_paywright-bypass.md) for more detail.
 
@@ -665,25 +672,19 @@ gpxpy  staticmap  Pillow  requests
 
 ## Troubleshooting
 
-**Garmin authentication fails (401)**
-Garmin's SSO can block automated credential logins from servers. The solution is to generate OAuth tokens interactively inside the container (where `garth` is already installed) and persist them to the data volume:
-
-```bash
-docker exec -it garmin-nostra python3 -c "import garth, getpass; garth.login('<garmin_username>', getpass.getpass('password: ')); garth.save('/data/tokens/<name>')"
-```
-
-Replace `<garmin_username>` and `<name>` (the user's `name` from `config.toml`). You will be prompted for the password. The tokens are written to `/data/tokens/<name>/` which is persisted on the host under `~/data/garminnostra/tokens/<name>/`.
-
-After this, the next sync will load the saved tokens and skip the credential login entirely.
+**Garmin authentication fails (401 / 429)**
+Garmin's SSO is protected by Cloudflare, which can block programmatic logins. Run the browser-based bootstrap to obtain tokens — see [Garmin token bootstrap](#garmin-token-bootstrap) above.
 
 If you already have working tokens from a previous installation, you can copy them directly:
 
 ```bash
-cp -r /old/path/tokens/<name> ~/data/garminnostra/tokens/<name>
+cp ~/old/path/tokens/<name>/garmin_tokens.json ~/data/garminnostra/tokens/<name>/garmin_tokens.json
 ```
 
+After this, the next sync will load the saved tokens and skip the credential login entirely.
+
 **Garmin MFA / 2FA**
-The interactive `garth.login()` command above also handles MFA — it will prompt for the one-time code if required.
+The bootstrap script handles MFA — complete any MFA challenge in the browser window that opens, then capture the service ticket as described in the bootstrap steps.
 
 **Map not attached**
 The `staticmap` library fetches tiles from `tile.openstreetmap.org`. Make sure the container has outbound internet access. Indoor activities without GPS will not produce a map.

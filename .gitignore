@@ -1,3 +1,5 @@
 config.toml
 __pycache__/
 *.pyc
+backfill_gpx.py
+analyze_fit_export.py

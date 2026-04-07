@@ -2,21 +2,21 @@
 One-time Garmin DI token bootstrap using your real browser.
 
 Use this when the normal programmatic login is blocked by Cloudflare (429).
-The script starts a tiny local HTTP server, opens Garmin Connect in your
-default browser, and intercepts the SSO service ticket from the redirect.
-It then exchanges the ticket for DI OAuth tokens and writes garmin_tokens.json
-so the sync service can authenticate without ever hitting SSO again.
+Opens the Garmin SSO page in your browser, you log in normally, then paste
+the service ticket back. The script exchanges it for DI OAuth tokens and
+writes garmin_tokens.json.
 
-Requirements (install once on the host — NOT in the Docker container):
+Requirements: pip install requests
 
-    pip install requests
+Standalone usage (no config.toml needed):
 
-Usage:
+    python3 src/bootstrap_auth.py -o ~/data/garminnostra/tokens/betty
+    python3 src/bootstrap_auth.py -o . --browser firefox
 
-    python3 src/bootstrap_auth.py [path/to/config.toml] [--token-dir DIR]
+Multi-user via config.toml:
 
-If no path is given the script looks for CONFIG_FILE env var, then
-config.toml in the current working directory.
+    python3 src/bootstrap_auth.py --config config.toml --token-dir ~/data/garminnostra/tokens
+    python3 src/bootstrap_auth.py --config config.toml --token-dir ~/data/garminnostra/tokens --user betty
 """
 
 from __future__ import annotations
@@ -24,23 +24,13 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 import sys
-import threading
 import webbrowser
-from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
-from urllib.parse import urlencode, urlparse, parse_qs
+from urllib.parse import urlencode
 
 import requests
-
-try:
-    import tomllib
-except ImportError:
-    try:
-        import tomli as tomllib  # type: ignore[no-reattr]
-    except ImportError:
-        print("ERROR: tomllib / tomli not available. Install with: pip install tomli")
-        sys.exit(1)
 
 
 # ---------------------------------------------------------------------------
@@ -48,6 +38,7 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 PORTAL_SSO_CLIENT_ID   = "GarminConnect"
+PORTAL_SSO_SERVICE_URL = "https://connect.garmin.com/app"
 SIGNIN_URL             = "https://sso.garmin.com/portal/sso/en-US/sign-in"
 DI_TOKEN_URL           = "https://diauth.garmin.com/di-oauth2-service/oauth/token"
 DI_GRANT_TYPE          = (
@@ -63,35 +54,10 @@ NATIVE_USER_AGENT = (
     "Android/33; Dalvik/2.1.0"
 )
 
-# The local redirect server. Garmin SSO redirects here with the ticket.
-REDIRECT_PORT = 8765
-REDIRECT_URI = f"http://localhost:{REDIRECT_PORT}/callback"
-
-
-# ---------------------------------------------------------------------------
-# Config helpers (minimal copies from sync.py — no side effects)
-# ---------------------------------------------------------------------------
-
-def _resolve_env_vars(obj):
-    if isinstance(obj, str) and obj.startswith("env:"):
-        var_name = obj[4:]
-        value = os.environ.get(var_name)
-        if value is None:
-            raise ValueError(
-                f"Config references env:{var_name} but the variable is not set."
-            )
-        return value
-    if isinstance(obj, dict):
-        return {k: _resolve_env_vars(v) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [_resolve_env_vars(item) for item in obj]
-    return obj
-
-
-def _load_config(path: str) -> dict:
-    with open(path, "rb") as f:
-        cfg = tomllib.load(f)
-    return _resolve_env_vars(cfg)
+BEFOREUNLOAD_SNIPPET = (
+    "window.addEventListener('beforeunload', function(e) "
+    "{ e.preventDefault(); e.returnValue = ''; });"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -102,7 +68,7 @@ def _basic_auth(client_id: str) -> str:
     return "Basic " + base64.b64encode(f"{client_id}:".encode()).decode()
 
 
-def _exchange_ticket(ticket: str, service_url: str) -> tuple[str, str | None, str]:
+def _exchange_ticket(ticket: str) -> tuple[str, str | None, str]:
     """Exchange a CAS service ticket for DI OAuth tokens."""
     last_err = None
     for client_id in DI_CLIENT_IDS:
@@ -120,7 +86,7 @@ def _exchange_ticket(ticket: str, service_url: str) -> tuple[str, str | None, st
                     "client_id": client_id,
                     "service_ticket": ticket,
                     "grant_type": DI_GRANT_TYPE,
-                    "service_url": service_url,
+                    "service_url": PORTAL_SSO_SERVICE_URL,
                 },
                 timeout=30,
             )
@@ -147,124 +113,36 @@ def _exchange_ticket(ticket: str, service_url: str) -> tuple[str, str | None, st
 
 
 # ---------------------------------------------------------------------------
-# Local HTTP server to capture the SSO redirect
+# Parse ticket from user input (accepts multiple formats)
 # ---------------------------------------------------------------------------
 
-class _TicketHandler(BaseHTTPRequestHandler):
-    """Handles the redirect from Garmin SSO, extracts the service ticket."""
-
-    ticket: str | None = None
-    error: str | None = None
-
-    def do_GET(self):
-        parsed = urlparse(self.path)
+def _parse_ticket(raw: str) -> str | None:
+    """Extract a service ticket from raw user input."""
+    raw = raw.strip()
+    if not raw:
+        return None
+    if raw.startswith("ST-"):
+        return raw
+    if "ticket=" in raw:
+        from urllib.parse import urlparse, parse_qs
+        parsed = urlparse(raw)
         params = parse_qs(parsed.query)
-        ticket = params.get("ticket", [None])[0]
-
-        if ticket:
-            _TicketHandler.ticket = ticket
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html")
-            self.end_headers()
-            self.wfile.write(
-                b"<html><body><h2>Login successful!</h2>"
-                b"<p>You can close this tab. The bootstrap script is exchanging "
-                b"tokens&hellip;</p></body></html>"
-            )
-        else:
-            _TicketHandler.error = f"No ticket in redirect: {self.path}"
-            self.send_response(400)
-            self.send_header("Content-Type", "text/html")
-            self.end_headers()
-            self.wfile.write(
-                b"<html><body><h2>Error</h2>"
-                b"<p>No service ticket found in the redirect URL.</p></body></html>"
-            )
-
-    def log_message(self, format, *args):
-        pass  # suppress request logging
+        tickets = params.get("ticket", [])
+        if tickets:
+            return tickets[0]
+    if "serviceTicketId" in raw:
+        match = re.search(r'"serviceTicketId"\s*:\s*"(ST-[^"]+)"', raw)
+        if match:
+            return match.group(1)
+    return None
 
 
 # ---------------------------------------------------------------------------
-# Per-user browser bootstrap
+# Save tokens
 # ---------------------------------------------------------------------------
 
-def _bootstrap_user(username: str, token_dir: Path, browser_name: str | None = None) -> None:
-    print(f"\n--- Bootstrapping {username} ---")
-
-    # Build the SSO URL that redirects back to our local server after login.
-    # The service URL must be one that Garmin's SSO accepts.
-    # We use the standard connect.garmin.com/app as the service URL since that's
-    # what the official login flow uses. After SSO validates the ticket, the
-    # browser is redirected to this URL with ?ticket=ST-xxxxx appended.
-    service_url = "https://connect.garmin.com/app"
-    sso_url = (
-        f"{SIGNIN_URL}?"
-        + urlencode({
-            "clientId": PORTAL_SSO_CLIENT_ID,
-            "service": service_url,
-        })
-    )
-
-    _TicketHandler.ticket = None
-    _TicketHandler.error = None
-
-    beforeunload_snippet = "window.addEventListener('beforeunload', function(e) { e.preventDefault(); e.returnValue = ''; });"
-    print(
-        f"\nPlease log in as {username} in the browser window that opens.\n"
-        f"\n"
-        f"BEFORE you log in:\n"
-        f"  1. Press F12 to open DevTools → Console tab\n"
-        f"  2. Type 'allow pasting' and press Enter (Firefox only, ignore the error)\n"
-        f"  3. Paste the following and press Enter:\n"
-        f"\n"
-        f"     {beforeunload_snippet}\n"
-        f"\n"
-        f"  4. Log in normally (complete CAPTCHA/MFA if needed)\n"
-        f"  5. A 'Leave this page?' dialog appears — click STAY ON PAGE\n"
-        f"  6. Switch to the Network tab, filter by 'login'\n"
-        f"  7. Click the /portal/api/login request → Response tab\n"
-        f"  8. Copy the serviceTicketId value (ST-xxxxx)\n"
-        f"  9. Paste it below\n"
-    )
-    print(f"Opening: {sso_url}")
-    if browser_name:
-        try:
-            webbrowser.get(browser_name).open(sso_url)
-        except webbrowser.Error:
-            print(f"WARNING: Could not open '{browser_name}'. Falling back to default browser.")
-            webbrowser.open(sso_url)
-    else:
-        webbrowser.open(sso_url)
-
-    # Wait for the user to paste the ticket
-    ticket = None
-    while not ticket:
-        raw = input("\nPaste the serviceTicketId value (ST-...): ").strip()
-        if not raw:
-            continue
-        # Accept the raw ticket value, a URL with ?ticket=, or a JSON snippet
-        if raw.startswith("ST-"):
-            ticket = raw
-        elif "ticket=" in raw:
-            parsed = urlparse(raw)
-            params = parse_qs(parsed.query)
-            tickets = params.get("ticket", [])
-            if tickets:
-                ticket = tickets[0]
-        elif "serviceTicketId" in raw:
-            # User may have pasted a JSON fragment
-            import re
-            match = re.search(r'"serviceTicketId"\s*:\s*"(ST-[^"]+)"', raw)
-            if match:
-                ticket = match.group(1)
-        if not ticket:
-            print("Could not find a service ticket (ST-...) in that input. Try again.")
-
-    print(f"Service ticket captured. Exchanging for DI tokens …")
-
-    access_token, refresh_token, client_id = _exchange_ticket(ticket, service_url)
-
+def _save_tokens(access_token: str, refresh_token: str | None,
+                 client_id: str, token_dir: Path) -> None:
     token_dir.mkdir(parents=True, exist_ok=True)
     if sys.platform != "win32":
         token_dir.chmod(0o700)
@@ -282,75 +160,192 @@ def _bootstrap_user(username: str, token_dir: Path, browser_name: str | None = N
 
 
 # ---------------------------------------------------------------------------
+# Interactive bootstrap for one user
+# ---------------------------------------------------------------------------
+
+def _bootstrap_user(label: str, token_dir: Path,
+                    browser_name: str | None = None) -> None:
+    print(f"\n--- Bootstrapping {label} ---")
+
+    sso_url = (
+        f"{SIGNIN_URL}?"
+        + urlencode({
+            "clientId": PORTAL_SSO_CLIENT_ID,
+            "service": PORTAL_SSO_SERVICE_URL,
+        })
+    )
+
+    print(
+        f"\nBEFORE you log in:\n"
+        f"  1. Press F12 to open DevTools → Console tab\n"
+        f"  2. Type 'allow pasting' and press Enter (Firefox only, ignore the error)\n"
+        f"  3. Paste the following and press Enter:\n"
+        f"\n"
+        f"     {BEFOREUNLOAD_SNIPPET}\n"
+        f"\n"
+        f"  4. Log in normally (complete CAPTCHA/MFA if needed)\n"
+        f"  5. A 'Leave this page?' dialog appears — click STAY ON PAGE\n"
+        f"  6. Switch to the Network tab, filter by 'login'\n"
+        f"  7. Click the /portal/api/login request → Response tab\n"
+        f"  8. Copy the serviceTicketId value (ST-xxxxx)\n"
+        f"  9. Paste it below\n"
+    )
+
+    print(f"Opening: {sso_url}")
+    if browser_name:
+        try:
+            webbrowser.get(browser_name).open(sso_url)
+        except webbrowser.Error:
+            print(f"WARNING: Could not open '{browser_name}'. Falling back to default browser.")
+            webbrowser.open(sso_url)
+    else:
+        webbrowser.open(sso_url)
+
+    ticket = None
+    while not ticket:
+        raw = input("\nPaste the serviceTicketId value (ST-...): ")
+        ticket = _parse_ticket(raw)
+        if not ticket:
+            print("Could not find a service ticket (ST-...) in that input. Try again.")
+
+    print("Service ticket captured. Exchanging for DI tokens …")
+    access_token, refresh_token, client_id = _exchange_ticket(ticket)
+    _save_tokens(access_token, refresh_token, client_id, token_dir)
+
+
+# ---------------------------------------------------------------------------
+# Config-based multi-user mode
+# ---------------------------------------------------------------------------
+
+def _load_config(path: str) -> dict:
+    try:
+        import tomllib
+    except ImportError:
+        import tomli as tomllib  # type: ignore[no-reattr]
+
+    def resolve(obj):
+        if isinstance(obj, str) and obj.startswith("env:"):
+            var = obj[4:]
+            val = os.environ.get(var)
+            if val is None:
+                raise ValueError(f"env:{var} is not set.")
+            return val
+        if isinstance(obj, dict):
+            return {k: resolve(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [resolve(i) for i in obj]
+        return obj
+
+    with open(path, "rb") as f:
+        return resolve(tomllib.load(f))
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
 def main() -> None:
     import argparse
     parser = argparse.ArgumentParser(
-        description=__doc__,
+        description="Bootstrap Garmin DI OAuth tokens using your real browser.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Standalone (one user, no config.toml):\n"
+            "  python3 src/bootstrap_auth.py -o ~/data/garminnostra/tokens/betty\n"
+            "\n"
+            "Multi-user via config.toml:\n"
+            "  python3 src/bootstrap_auth.py --config config.toml --token-dir ~/data/garminnostra/tokens\n"
+            "  python3 src/bootstrap_auth.py --config config.toml --token-dir ~/data/garminnostra/tokens --user betty\n"
+        ),
     )
     parser.add_argument(
-        "config", nargs="?",
-        default=os.environ.get("CONFIG_FILE", "config.toml"),
-        help="Path to config.toml (default: CONFIG_FILE env var or config.toml)",
+        "-o", "--output", metavar="DIR",
+        help="Output directory for garmin_tokens.json (standalone mode, one user). "
+             "Default: current directory.",
+    )
+    parser.add_argument(
+        "--config", metavar="FILE",
+        help="Path to config.toml (multi-user mode). Reads users and token_dir from config.",
     )
     parser.add_argument(
         "--token-dir", metavar="DIR",
-        help="Override token directory from config (useful when running on host "
-             "where Docker paths differ, e.g. ~/data/garminnostra/tokens)",
+        help="Override token_dir from config (e.g. ~/data/garminnostra/tokens).",
+    )
+    parser.add_argument(
+        "--user", metavar="NAME",
+        help="Bootstrap only this user (matched against 'name' in config). "
+             "Without this flag, all Garmin users in config are bootstrapped.",
     )
     parser.add_argument(
         "--browser", metavar="NAME",
-        help="Browser to open (e.g. 'firefox', 'chromium-browser'). "
-             "Default: system default browser.",
+        help="Browser to open (e.g. 'firefox'). Default: system default.",
     )
     args = parser.parse_args()
-    config_path = args.config
 
-    if not Path(config_path).exists():
-        print(f"ERROR: Config file not found: {config_path}")
-        sys.exit(1)
+    # Standalone mode: -o / --output
+    if args.output:
+        output_dir = Path(args.output).expanduser()
+        label = output_dir.name or "Garmin user"
+        _bootstrap_user(label, output_dir, browser_name=args.browser)
+        return
 
-    cfg = _load_config(config_path)
-    token_dir = Path(
-        args.token_dir or cfg.get("storage", {}).get("token_dir", "/data/tokens")
-    ).expanduser()
-    users = cfg.get("users", [])
+    # Multi-user mode: --config
+    if args.config:
+        if not Path(args.config).exists():
+            print(f"ERROR: Config file not found: {args.config}")
+            sys.exit(1)
 
-    garmin_users = [
-        u for u in users
-        if u.get("garmin_username") and u.get("garmin_password")
-    ]
+        cfg = _load_config(args.config)
+        token_dir = Path(
+            args.token_dir or cfg.get("storage", {}).get("token_dir", "/data/tokens")
+        ).expanduser()
+        users = cfg.get("users", [])
 
-    if not garmin_users:
-        print("No users with garmin_username/garmin_password found in config.")
-        sys.exit(0)
+        garmin_users = [
+            u for u in users
+            if u.get("garmin_username") and u.get("garmin_password")
+        ]
 
-    print(f"Found {len(garmin_users)} Garmin user(s) to bootstrap.")
+        if args.user:
+            garmin_users = [
+                u for u in garmin_users
+                if u.get("name", "").lower() == args.user.lower()
+                or u.get("garmin_username", "").lower() == args.user.lower()
+            ]
+            if not garmin_users:
+                print(f"ERROR: No Garmin user matching '{args.user}' found in config.")
+                sys.exit(1)
 
-    errors = []
-    for user in garmin_users:
-        name = user.get("name", user["garmin_username"])
-        user_token_dir = token_dir / name
-        try:
-            _bootstrap_user(
-                username=user["garmin_username"],
-                token_dir=user_token_dir,
-                browser_name=args.browser,
-            )
-        except Exception as e:
-            print(f"ERROR bootstrapping {name}: {e}")
-            errors.append(name)
+        if not garmin_users:
+            print("No users with garmin_username/garmin_password found in config.")
+            sys.exit(0)
 
-    print()
-    if errors:
-        print(f"Bootstrap failed for: {', '.join(errors)}")
-        sys.exit(1)
-    else:
-        print("All users bootstrapped successfully.")
-        print("Restart the garmin-nostra container to use the new tokens.")
+        print(f"Found {len(garmin_users)} Garmin user(s) to bootstrap.")
+
+        errors = []
+        for user in garmin_users:
+            name = user.get("name", user["garmin_username"])
+            user_token_dir = token_dir / name
+            try:
+                _bootstrap_user(name, user_token_dir, browser_name=args.browser)
+            except Exception as e:
+                print(f"ERROR bootstrapping {name}: {e}")
+                errors.append(name)
+
+        print()
+        if errors:
+            print(f"Bootstrap failed for: {', '.join(errors)}")
+            sys.exit(1)
+        else:
+            print("All users bootstrapped successfully.")
+            print("Restart the garmin-nostra container to use the new tokens.")
+        return
+
+    # No mode specified — default to standalone with current directory
+    if not args.output and not args.config:
+        output_dir = Path(".").resolve()
+        print(f"No --config or -o specified. Token will be saved to {output_dir}/garmin_tokens.json")
+        _bootstrap_user("Garmin user", output_dir, browser_name=args.browser)
 
 
 if __name__ == "__main__":
