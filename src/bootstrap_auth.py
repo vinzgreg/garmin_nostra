@@ -226,6 +226,8 @@ def _bootstrap_user(username: str, password: str, token_dir: Path) -> None:
     access_token, refresh_token, client_id = _exchange_ticket(ticket)
 
     token_dir.mkdir(parents=True, exist_ok=True)
+    if hasattr(os, "chmod"):
+        token_dir.chmod(0o700)
     token_file = token_dir / "garmin_tokens.json"
     token_file.write_text(
         json.dumps({
@@ -234,6 +236,8 @@ def _bootstrap_user(username: str, password: str, token_dir: Path) -> None:
             "di_client_id": client_id,
         })
     )
+    if hasattr(os, "chmod"):
+        token_file.chmod(0o600)
     print(f"Tokens saved to {token_file}")
 
 
