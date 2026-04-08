@@ -25,7 +25,7 @@ from storage import ActivityStore
 from caldav_push import CalDAVPusher
 from mastodon_bot import MastodonBot
 from kudos_machine import KudosMachine
-from map_render import render_map
+from map_render import fit_to_gpx, render_map
 
 LOG_FORMAT = "%(asctime)s %(levelname)-8s %(name)s: %(message)s"
 LOG_DATEFMT = "%Y-%m-%dT%H:%M:%S"
@@ -486,6 +486,11 @@ def process_user_wahoo(
                         fit_data = None
 
                 map_path = None
+                if fit_data:
+                    gpx_data = fit_to_gpx(fit_data)
+                    if gpx_data:
+                        map_path = store.map_path(name, wahoo_id)
+                        map_path = render_map(gpx_data, map_path, timeout=request_timeout)
 
                 activity_row = store.save_wahoo_activity(user_id, activity_row, fit_path=fit_path)
                 logger.info("[%s] New Wahoo workout saved: %s", name, wahoo_id)

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import io
 import logging
 from pathlib import Path
 
+import fitparse
 import gpxpy
 from PIL import ImageDraw, ImageFont
 from staticmap import CircleMarker, Line, StaticMap
@@ -33,6 +35,44 @@ def _add_osm_attribution(image) -> None:
     y = image.height - h - 4
     draw.rectangle((x - 2, y - 1, x + w + 2, y + h + 2), fill=(255, 255, 255, 180))
     draw.text((x, y), text, font=font, fill=(80, 80, 80))
+
+
+_SEMICIRCLES_TO_DEG = 180.0 / 2**31
+
+
+def fit_to_gpx(fit_bytes: bytes) -> bytes | None:
+    """Convert raw FIT bytes to minimal GPX bytes.
+
+    Returns None if the FIT file contains fewer than 2 GPS points
+    (e.g. indoor activities without GPS).
+    """
+    try:
+        fit = fitparse.FitFile(io.BytesIO(fit_bytes))
+        points: list[tuple[float, float]] = []
+        for record in fit.get_messages("record"):
+            data = {f.name: f.value for f in record}
+            lat = data.get("position_lat")
+            lon = data.get("position_long")
+            if lat is None or lon is None:
+                continue
+            points.append((lat * _SEMICIRCLES_TO_DEG, lon * _SEMICIRCLES_TO_DEG))
+    except Exception as exc:
+        logger.warning("FIT parse error: %s", exc)
+        return None
+
+    if len(points) < 2:
+        logger.debug("FIT has fewer than 2 GPS points — skipping GPX conversion.")
+        return None
+
+    lines = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<gpx version="1.1" creator="garmin-nostra">',
+        "  <trk><trkseg>",
+    ]
+    for lat, lon in points:
+        lines.append(f'    <trkpt lat="{lat:.7f}" lon="{lon:.7f}"/>')
+    lines += ["  </trkseg></trk>", "</gpx>"]
+    return "\n".join(lines).encode()
 
 
 def render_map(gpx_data: bytes, output_path: Path, timeout: int = 30) -> Path | None:
