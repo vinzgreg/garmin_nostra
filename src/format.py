@@ -174,8 +174,6 @@ def build_mastodon_message(handle: str, activity: dict[str, Any]) -> str:
         if max_power:
             power_str += f" / Max {int(max_power)} W"
         secondary.append(power_str)
-    elif avg_power:
-        secondary.append(f"⚡ Ø {int(avg_power)} W")
     if avg_hr:
         secondary.append(f"❤️ Ø {int(avg_hr)} bpm")
     if secondary:
