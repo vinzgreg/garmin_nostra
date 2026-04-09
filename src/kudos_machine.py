@@ -159,7 +159,7 @@ class KudosMachine:
         mastodon_handle: str,
         store: "ActivityStore",
         max_age_days: int | None = None,
-        public: bool = False,
+        visibility: str = "direct",
     ) -> None:
         """Check all posted activities for new favs and send kudos replies."""
         activities = store.get_activities_for_kudos(user_id, max_age_days=max_age_days)
@@ -206,7 +206,7 @@ class KudosMachine:
 
                 text = self._build_text(fav_handle, mastodon_handle)
                 try:
-                    self._bot.post_reply(text, in_reply_to_id=status_id, public=public)
+                    self._bot.post_reply(text, in_reply_to_id=status_id, visibility=visibility)
                     store.mark_kudos_sent(status_id, account_id)
                     logger.info(
                         "[kudos] Replied to status %s — kudos to %s for activity %s.",

@@ -6,7 +6,7 @@ For each new activity it:
 - stores all metrics in a local SQLite database
 - downloads and saves the GPX file
 - renders a map image of the GPS track (OpenStreetMap tiles)
-- posts a Mastodon mention to the user with key stats and the map (public or unlisted, per-user configurable)
+- posts a Mastodon mention to the user with key stats and the map (visibility per-user configurable: public, unlisted, or direct DM)
 - optionally pushes a CalDAV event to e.g. Nextcloud calendar
 
 Messages and calendar entries are formatted in **German** with metric units.
@@ -19,7 +19,7 @@ Messages and calendar entries are formatted in **German** with metric units.
 |---|---|
 | Multi-user | One `[[users]]` block per account (Garmin or Wahoo) |
 | Wahoo support | Sync from Wahoo Cloud API; optionally upload activities to Garmin Connect |
-| Mastodon post | Bot mentions the user; visibility is `public` or `unlisted` per user |
+| Mastodon post | Bot mentions the user; visibility is `public`, `unlisted`, or `direct` (DM) per user |
 | Activity stats | Duration, distance, pace/speed, elevation, power, heart rate |
 | Map image | GPX track rendered as PNG, attached to the DM |
 | GPX + FIT files | Original GPX and FIT files downloaded and stored per activity |
@@ -33,7 +33,7 @@ Messages and calendar entries are formatted in **German** with metric units.
 
 ## Message format
 
-The bot posts a Mastodon mention to each user. Visibility is `unlisted` by default (boostable, but not on the public timeline); set `mastodon_public = true` for fully public posts.
+The bot posts a Mastodon mention to each user. Visibility is `direct` (DM) by default — only the mentioned user sees the post. Set `mastodon_public = "listed"` for unlisted posts (visible to followers and via link), or `mastodon_public = true` for fully public posts.
 
 **Running example:**
 ```
@@ -414,7 +414,8 @@ One block per account (Garmin or Wahoo):
 | `wahoo_refresh_token` | Wahoo | OAuth refresh token (obtained via `wahoo_auth.py`) |
 | `wahoo_sync_to_garmin` | `false` | Upload Wahoo activities to Garmin Connect (requires Garmin credentials) |
 | `mastodon_handle` | — | `@user@instance` — the bot will mention this handle |
-| `mastodon_public` | `false` | `true` = public post, `false` = unlisted (boostable but not on public timeline) |
+| `mastodon_public` | `false` | Controls post visibility: `true` = public (on public timeline); `"listed"` = unlisted (followers + link, not on timeline); `false` = direct DM (only the mentioned user sees it) |
+| `mastodon_add_mention` | — | *(optional)* Additional Mastodon handles to include in the post, e.g. `"@coach@mastodon.social, @partner@fosstodon.org"`. Only useful with `mastodon_public = false` — all mentioned handles receive the DM. Accepts a comma- or space-separated string. |
 | `mastodon_suppress_types` | `[]` | List of glob patterns (case-insensitive) to suppress Mastodon posts for matching activity types. Example: `["*pilates*", "*strength*", "yoga"]`. Wildcards: `*` matches any characters, `?` matches one character. Suppressed activities are marked as posted (no retry). |
 | `caldav_enabled` | `false` | Set `true` to push CalDAV events for this user |
 | `suppressKudos` | `false` | Set `true` to opt this user out of kudos replies |
@@ -561,7 +562,7 @@ pip install -r requirements-dev.txt
 ### Run the test suite
 
 ```bash
-python3 -m pytest tests/ -q
+.venv/bin/python3 -m pytest tests/ -q
 ```
 
 All tests are offline — no Garmin, Wahoo, Mastodon, or CalDAV credentials are needed. External services are replaced by mocks.
@@ -598,13 +599,13 @@ Fixtures in `tests/fixtures/` are anonymized JSON files — no real GPS coordina
 
 ```bash
 # One module
-python3 -m pytest tests/test_storage.py -v
+.venv/bin/python3 -m pytest tests/test_storage.py -v
 
 # One test by name
-python3 -m pytest tests/test_storage.py::test_backfill_fills_null_power -v
+.venv/bin/python3 -m pytest tests/test_storage.py::test_backfill_fills_null_power -v
 
 # Only fast unit tests (no mocked network overhead)
-python3 -m pytest tests/test_format.py tests/test_wahoo_map.py -v
+.venv/bin/python3 -m pytest tests/test_format.py tests/test_wahoo_map.py -v
 ```
 
 ### Integration tests (requires live credentials)
@@ -612,7 +613,7 @@ python3 -m pytest tests/test_format.py tests/test_wahoo_map.py -v
 Integration tests that hit the real Garmin or Wahoo APIs are not included in the default suite. Mark them with `@pytest.mark.integration` and run with:
 
 ```bash
-python3 -m pytest tests/ -m integration
+.venv/bin/python3 -m pytest tests/ -m integration
 ```
 
 ---
@@ -628,7 +629,7 @@ python3 -m pytest tests/ -m integration
 | `src/storage.py` | SQLite store — users, activities, kudos deduplication, sync audit log |
 | `src/format.py` | German formatting: dates, numbers, pace, message builder |
 | `src/map_render.py` | GPX → PNG via `staticmap` (OSM tiles) |
-| `src/mastodon_bot.py` | Bot that posts mentions with optional map attachment (public or unlisted) |
+| `src/mastodon_bot.py` | Bot that posts mentions with optional map attachment (public, unlisted, or direct DM) |
 | `src/kudos_machine.py` | Polls activity posts for new favourites and sends kudos replies |
 | `src/caldav_push.py` | Builds VEVENT and pushes to Nextcloud CalDAV |
 
@@ -671,7 +672,9 @@ The bootstrap script handles MFA — complete any MFA challenge in the browser w
 The `staticmap` library fetches tiles from `tile.openstreetmap.org`. Make sure the container has outbound internet access. Indoor activities without GPS will not produce a map.
 
 **Mastodon post not visible**
-For `unlisted` posts, the post appears in the mentioned user's notifications and on the bot's profile, but not on the public timeline. To make posts appear publicly, set `mastodon_public = true` for that user. On some instances, mentions from unfollowed accounts land in filtered notifications.
+The default visibility is `direct` (DM) — the post only appears in the mentioned user's DM/notifications timeline, not publicly. Set `mastodon_public = "listed"` for unlisted posts (visible to followers and on the bot's profile, but not on the public timeline), or `mastodon_public = true` for fully public posts. On some instances, mentions from unfollowed accounts land in filtered notifications.
+
+To CC additional accounts on a DM post, add `mastodon_add_mention = "@other@instance"` to the user block — all mentioned handles receive the DM.
 
 **Wahoo authentication fails**
 Re-run the OAuth bootstrap to obtain a fresh refresh token — see [Wahoo setup](#wahoo-setup) above for the full procedure. Wahoo refresh tokens expire after 60 days of inactivity.

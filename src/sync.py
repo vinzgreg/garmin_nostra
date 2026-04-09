@@ -120,6 +120,33 @@ def _build_caldav_pusher(cfg: dict, timeout: int = 30) -> CalDAVPusher | None:
     )
 
 
+def _parse_extra_mentions(value) -> list[str]:
+    """Parse mastodon_add_mention config into a list of handles.
+
+    Accepts a string like "@user2@inst.social , @user3@inst.social" or a list.
+    Returns an empty list when value is falsy.
+    """
+    if not value:
+        return []
+    if isinstance(value, list):
+        return [h.strip() for h in value if h.strip()]
+    return [h.strip() for h in str(value).replace(",", " ").split() if h.strip()]
+
+
+def _mastodon_visibility(mastodon_public) -> str:
+    """Map mastodon_public config value to a Mastodon visibility string.
+
+    true    → "public"   (on public timeline)
+    "listed" → "unlisted" (followers + link, not on timeline)
+    false   → "direct"   (DM — only the mentioned user sees it)
+    """
+    if mastodon_public is True:
+        return "public"
+    if mastodon_public == "listed":
+        return "unlisted"
+    return "direct"
+
+
 def process_user(
     user_cfg: dict,
     store: ActivityStore,
@@ -324,7 +351,8 @@ def process_user(
                 logger.debug("[%s] Posting Mastodon for %s", name, garmin_id)
                 try:
                     status_id = bot.post_activity(handle, activity_row, map_path,
-                                                  public=user_cfg.get("mastodon_public", False))
+                                                  visibility=_mastodon_visibility(user_cfg.get("mastodon_public", False)),
+                                                  extra_mentions=_parse_extra_mentions(user_cfg.get("mastodon_add_mention")))
                     store.mark_mastodon_posted(user_id, garmin_id, status_id=status_id)
                     if mastodon_post_delay_s > 0:
                         time.sleep(mastodon_post_delay_s)
@@ -351,7 +379,7 @@ def process_user(
         try:
             kudos_machine.process_user(
                 user_id, handle, store, max_age_days=mastodon_max_age_days,
-                public=user_cfg.get("mastodon_public", False),
+                visibility=_mastodon_visibility(user_cfg.get("mastodon_public", False)),
             )
         except Exception as exc:
             logger.error("[%s] KudosMachine failed: %s", name, exc)
@@ -564,7 +592,8 @@ def process_user_wahoo(
             if handle and not activity_row.get("mastodon_posted") and not skip_mastodon:
                 try:
                     status_id = bot.post_activity(handle, activity_row, map_path,
-                                                  public=user_cfg.get("mastodon_public", False))
+                                                  visibility=_mastodon_visibility(user_cfg.get("mastodon_public", False)),
+                                                  extra_mentions=_parse_extra_mentions(user_cfg.get("mastodon_add_mention")))
                     store.mark_mastodon_posted(user_id, wahoo_id, status_id=status_id)
                     if mastodon_post_delay_s > 0:
                         time.sleep(mastodon_post_delay_s)
@@ -597,7 +626,7 @@ def process_user_wahoo(
         try:
             kudos_machine.process_user(
                 user_id, handle, store, max_age_days=mastodon_max_age_days,
-                public=user_cfg.get("mastodon_public", False),
+                visibility=_mastodon_visibility(user_cfg.get("mastodon_public", False)),
             )
         except Exception as exc:
             logger.error("[%s] KudosMachine failed: %s", name, exc)

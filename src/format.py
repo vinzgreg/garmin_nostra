@@ -117,7 +117,11 @@ def fmt_speed(distance_m: float, duration_s: float) -> str:
 
 # ── Mastodon message builder ─────────────────────────────────────────────────
 
-def build_mastodon_message(handle: str, activity: dict[str, Any]) -> str:
+def build_mastodon_message(
+    handle: str,
+    activity: dict[str, Any],
+    extra_mentions: list[str] | None = None,
+) -> str:
     """
     Build a German-language Mastodon direct-mention message.
 
@@ -180,6 +184,9 @@ def build_mastodon_message(handle: str, activity: dict[str, Any]) -> str:
         lines.append("  ".join(secondary))
 
     lines.append("")
-    lines.append(f"{hashtag} #GarminNoStra {handle}")
+    footer = f"{hashtag} #GarminNoStra {handle}"
+    if extra_mentions:
+        footer += " " + " ".join(extra_mentions)
+    lines.append(footer)
 
     return "\n".join(lines)

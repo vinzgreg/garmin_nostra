@@ -247,3 +247,23 @@ def test_message_zero_distance_no_pace():
     row = _activity_row({"distance_m": 0, "duration_s": 3600.0})
     msg = build_mastodon_message("@testuser@social.example.invalid", row)
     assert "min/km" not in msg
+
+
+def test_extra_mentions_appended_to_footer():
+    row = _activity_row({})
+    msg = build_mastodon_message(
+        "@testuser@social.example.invalid",
+        row,
+        extra_mentions=["@cc1@other.social", "@cc2@other.social"],
+    )
+    last_line = msg.splitlines()[-1]
+    assert "@testuser@social.example.invalid" in last_line
+    assert "@cc1@other.social" in last_line
+    assert "@cc2@other.social" in last_line
+
+
+def test_extra_mentions_none_leaves_footer_unchanged():
+    row = _activity_row({})
+    msg_plain = build_mastodon_message("@testuser@social.example.invalid", row)
+    msg_none = build_mastodon_message("@testuser@social.example.invalid", row, extra_mentions=None)
+    assert msg_plain == msg_none

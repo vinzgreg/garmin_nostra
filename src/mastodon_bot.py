@@ -35,15 +35,19 @@ class MastodonBot:
         mastodon_handle: str,
         activity: dict[str, Any],
         map_image_path: Path | None = None,
-        public: bool = False,
+        visibility: str = "direct",
+        extra_mentions: list[str] | None = None,
     ) -> str | None:
         """
         Send a mention to *mastodon_handle* with the activity summary.
         Attaches a map image if *map_image_path* exists.
-        Use *public=True* for a public post, otherwise posts as unlisted.
+        *visibility* is passed directly to the Mastodon API:
+          "public"   — on the public timeline
+          "unlisted" — accessible via link, shown to followers
+          "direct"   — DM, only visible to the mentioned user
         Returns the Mastodon status ID of the posted status, or None on failure.
         """
-        text = build_mastodon_message(mastodon_handle, activity)
+        text = build_mastodon_message(mastodon_handle, activity, extra_mentions=extra_mentions)
         logger.debug("Mastodon message:\n%s", text)
 
         media_ids: list = []
@@ -63,7 +67,7 @@ class MastodonBot:
         response = self._client.status_post(
             text,
             media_ids=media_ids or None,
-            visibility="public" if public else "unlisted",
+            visibility=visibility,
         )
         logger.info(
             "Mastodon-Post gesendet an %s für Aktivität %s.",
@@ -76,12 +80,12 @@ class MastodonBot:
         """Return list of accounts that have favourited *status_id*."""
         return self._client.status_favourited_by(status_id) or []
 
-    def post_reply(self, text: str, in_reply_to_id: str, public: bool = False) -> None:
+    def post_reply(self, text: str, in_reply_to_id: str, visibility: str = "direct") -> None:
         """Post a reply to *in_reply_to_id*."""
         self._client.status_post(
             text,
             in_reply_to_id=in_reply_to_id,
-            visibility="public" if public else "unlisted",
+            visibility=visibility,
         )
 
 
