@@ -23,7 +23,7 @@ Messages and calendar entries are formatted in **German** with metric units.
 | Activity stats | Duration, distance, pace/speed, elevation, power, heart rate |
 | Map image | GPX track rendered as PNG, attached to the DM |
 | GPX + FIT files | Original GPX and FIT files downloaded and stored per activity |
-| KudosMachine | Polls activity posts for favourites and auto-replies with a kudos message mentioning the fav-giver; 100 random German messages or a custom template |
+| KudosMachine | Polls activity posts for favourites and auto-replies with a kudos message mentioning the fav-giver; 100 random German messages or a custom template. Only active when `mastodon_public` is `true` or `"listed"` — DMs cannot be favourited. |
 | CalDAV | Optional per-user; pushes VEVENT to an iCal compatible calendar |
 | SQLite | All Garmin data stored; queryable by user, type, time |
 | Token caching | Garmin OAuth tokens persisted per user — avoids repeated logins |
@@ -418,7 +418,7 @@ One block per account (Garmin or Wahoo):
 | `mastodon_add_mention` | — | *(optional)* Additional Mastodon handles to include in the post, e.g. `"@coach@mastodon.social, @partner@fosstodon.org"`. Only useful with `mastodon_public = false` — all mentioned handles receive the DM. Accepts a comma- or space-separated string. |
 | `mastodon_suppress_types` | `[]` | List of glob patterns (case-insensitive) to suppress Mastodon posts for matching activity types. Example: `["*pilates*", "*strength*", "yoga"]`. Wildcards: `*` matches any characters, `?` matches one character. Suppressed activities are marked as posted (no retry). |
 | `caldav_enabled` | `false` | Set `true` to push CalDAV events for this user |
-| `suppressKudos` | `false` | Set `true` to opt this user out of kudos replies |
+| `suppressKudos` | `false` | Set `true` to opt this user out of kudos replies. KudosMachine is also automatically skipped when `mastodon_public = false` (DMs cannot be favourited). |
 
 ---
 

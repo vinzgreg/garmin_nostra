@@ -374,12 +374,13 @@ def process_user(
 
     # ── KudosMachine — runs after every invocation, even if Garmin sync failed ─
     # skip_kudos=True when called from "both" mode — Wahoo side already ran it
-    if kudos_machine is not None and handle and not skip_kudos and not user_cfg.get("suppressKudos", False):
+    _visibility = _mastodon_visibility(user_cfg.get("mastodon_public", False))
+    if kudos_machine is not None and handle and not skip_kudos and not user_cfg.get("suppressKudos", False) and _visibility != "direct":
         logger.debug("[%s] Running KudosMachine.", name)
         try:
             kudos_machine.process_user(
                 user_id, handle, store, max_age_days=mastodon_max_age_days,
-                visibility=_mastodon_visibility(user_cfg.get("mastodon_public", False)),
+                visibility=_visibility,
             )
         except Exception as exc:
             logger.error("[%s] KudosMachine failed: %s", name, exc)
@@ -622,11 +623,12 @@ def process_user_wahoo(
         wahoo.close()
 
     # ── KudosMachine — runs after every invocation ────────────────────────
-    if kudos_machine is not None and handle and not user_cfg.get("suppressKudos", False):
+    _visibility = _mastodon_visibility(user_cfg.get("mastodon_public", False))
+    if kudos_machine is not None and handle and not user_cfg.get("suppressKudos", False) and _visibility != "direct":
         try:
             kudos_machine.process_user(
                 user_id, handle, store, max_age_days=mastodon_max_age_days,
-                visibility=_mastodon_visibility(user_cfg.get("mastodon_public", False)),
+                visibility=_visibility,
             )
         except Exception as exc:
             logger.error("[%s] KudosMachine failed: %s", name, exc)
