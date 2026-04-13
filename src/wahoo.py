@@ -356,6 +356,10 @@ def map_wahoo_activity(user_id: int, workout: dict, summary: dict) -> dict:
     workout_type_id = workout.get("workout_type_id")
     activity_type = wahoo_activity_type(workout_type_id)
 
+    workout_name = workout.get("name") or summary.get("name") or ""
+    if "KICKR" in workout_name.upper():
+        activity_type = "indoor_cycling"
+
     starts_str = workout.get("starts") or ""
     start_utc = None
     start_local = None

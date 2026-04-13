@@ -515,7 +515,7 @@ def process_user_wahoo(
                         fit_data = None
 
                 map_path = None
-                if fit_data:
+                if fit_data and activity_row.get("activity_type") != "indoor_cycling":
                     gpx_data = fit_to_gpx(fit_data)
                     if gpx_data:
                         map_path = store.map_path(name, wahoo_id)

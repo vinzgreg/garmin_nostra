@@ -162,6 +162,25 @@ def test_map_wahoo_missing_starts_graceful():
     assert row["start_time_local"] is None
 
 
+def test_kickr_in_name_overrides_type_to_indoor_cycling():
+    """Workout with KICKR in the title must be classified as indoor_cycling."""
+    workout = {"id": "77", "name": "KICKR Core Ride", "workout_type_id": 0}
+    row = map_wahoo_activity(1, workout, {})
+    assert row["activity_type"] == "indoor_cycling"
+
+
+def test_kickr_lowercase_in_name_overrides_type():
+    workout = {"id": "78", "name": "Morning kickr session", "workout_type_id": 15}
+    row = map_wahoo_activity(1, workout, {})
+    assert row["activity_type"] == "indoor_cycling"
+
+
+def test_non_kickr_cycling_keeps_original_type():
+    workout = {"id": "79", "name": "Outdoor ride", "workout_type_id": 15}
+    row = map_wahoo_activity(1, workout, {})
+    assert row["activity_type"] == "road_biking"
+
+
 def test_map_wahoo_unknown_timezone_falls_back_to_utc(wahoo_workout_cycling):
     summary = {
         "distance_accum": "1000.0",
