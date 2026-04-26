@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import random
+import re
 import time
 from typing import TYPE_CHECKING
 
@@ -197,6 +198,7 @@ class KudosMachine:
                 garmin_id, status_id, len(favs), len(new_favs),
             )
 
+            activity_name = activity.get("activity_name") or ""
             for account in favs:
                 account_id = str(account["id"])
                 fav_handle = "@" + account["acct"]
@@ -204,7 +206,7 @@ class KudosMachine:
                 if store.is_kudos_sent(status_id, account_id):
                     continue
 
-                text = self._build_text(fav_handle, mastodon_handle)
+                text = self._build_text(fav_handle, mastodon_handle, activity_name)
                 try:
                     self._bot.post_reply(text, in_reply_to_id=status_id, visibility=visibility)
                     store.mark_kudos_sent(status_id, account_id)
@@ -220,11 +222,13 @@ class KudosMachine:
                         fav_handle, status_id, exc,
                     )
 
-    def _build_text(self, fav_handle: str, activity_handle: str) -> str:
+    def _build_text(self, fav_handle: str, activity_handle: str, activity_name: str = "") -> str:
+        title_mentions = re.findall(r"@\S+", activity_name)
+        mention_suffix = (" " + " ".join(title_mentions)) if title_mentions else ""
         if self._template:
             return self._template.format(
                 fav_giver=fav_handle,
                 activity_user=activity_handle,
-            )
+            ) + mention_suffix
         msg = random.choice(KUDOS_MESSAGES)
-        return f":kudos: {fav_handle} {activity_handle} — {msg}"
+        return f":kudos: {fav_handle} {activity_handle}{mention_suffix} — {msg}"

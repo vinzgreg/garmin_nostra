@@ -595,7 +595,7 @@ class ActivityStore:
     ) -> list[dict]:
         """Return posted activities that have a mastodon_status_id, optionally age-limited."""
         query = (
-            "SELECT garmin_activity_id, mastodon_status_id, start_time_utc"
+            "SELECT garmin_activity_id, mastodon_status_id, start_time_utc, activity_name"
             " FROM activities"
             " WHERE user_id = ? AND mastodon_posted = 1 AND mastodon_status_id IS NOT NULL"
         )
