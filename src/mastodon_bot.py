@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +12,12 @@ from mastodon import Mastodon
 from format import build_mastodon_message
 
 logger = logging.getLogger(__name__)
+
+# Media uploads occasionally fail transiently (rate limit, hoster storage
+# hiccup, timeout). Retry a couple of times before giving up and posting
+# without the attachment.
+_MEDIA_UPLOAD_RETRIES = 2      # additional attempts after the first
+_MEDIA_UPLOAD_BACKOFF_S = 3    # wait between attempts
 
 
 class MastodonBot:
@@ -29,6 +36,37 @@ class MastodonBot:
             ratelimit_method="throw",
         )
         logger.info("Mastodon bot initialised (%s).", api_base_url)
+
+    def _upload_media(self, image_path: Path, description: str) -> str | None:
+        """Upload a PNG to Mastodon, retrying transient failures with a short
+        backoff. Returns the media id, or None if every attempt fails — the
+        caller then posts without this attachment rather than losing the post.
+        """
+        attempts = _MEDIA_UPLOAD_RETRIES + 1
+        for attempt in range(1, attempts + 1):
+            try:
+                with open(image_path, "rb") as fh:
+                    media = self._client.media_post(
+                        fh,
+                        mime_type="image/png",
+                        description=description,
+                    )
+                logger.debug("Media uploaded: %s", image_path)
+                return media["id"]
+            except Exception as exc:
+                if attempt < attempts:
+                    logger.warning(
+                        "Media upload failed (attempt %d/%d) for %s: %s — retrying in %ds.",
+                        attempt, attempts, image_path, exc, _MEDIA_UPLOAD_BACKOFF_S,
+                    )
+                    time.sleep(_MEDIA_UPLOAD_BACKOFF_S)
+                else:
+                    logger.error(
+                        "Media upload permanently failed after %d attempts for %s: %s "
+                        "— posting without it.",
+                        attempts, image_path, exc,
+                    )
+        return None
 
     def post_activity(
         self,
@@ -54,30 +92,14 @@ class MastodonBot:
 
         media_ids: list = []
         if map_image_path and map_image_path.exists():
-            try:
-                with open(map_image_path, "rb") as fh:
-                    media = self._client.media_post(
-                        fh,
-                        mime_type="image/png",
-                        description="Streckenkarte der Aktivität",
-                    )
-                media_ids.append(media["id"])
-                logger.debug("Map image uploaded: %s", map_image_path)
-            except Exception as exc:
-                logger.warning("Map image upload failed: %s", exc)
+            media_id = self._upload_media(map_image_path, "Streckenkarte der Aktivität")
+            if media_id:
+                media_ids.append(media_id)
 
         if elevation_profile_path and elevation_profile_path.exists():
-            try:
-                with open(elevation_profile_path, "rb") as fh:
-                    media = self._client.media_post(
-                        fh,
-                        mime_type="image/png",
-                        description="Höhenprofil der Aktivität",
-                    )
-                media_ids.append(media["id"])
-                logger.debug("Elevation profile image uploaded: %s", elevation_profile_path)
-            except Exception as exc:
-                logger.warning("Elevation profile image upload failed: %s", exc)
+            media_id = self._upload_media(elevation_profile_path, "Höhenprofil der Aktivität")
+            if media_id:
+                media_ids.append(media_id)
 
         response = self._client.status_post(
             text,

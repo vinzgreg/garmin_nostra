@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 
 import fitparse
@@ -56,19 +57,34 @@ _SEMICIRCLES_TO_DEG = 180.0 / 2**31
 def fit_to_gpx(fit_bytes: bytes) -> bytes | None:
     """Convert raw FIT bytes to minimal GPX bytes.
 
+    Each track point also carries <ele> (from the record's ``altitude``,
+    falling back to ``enhanced_altitude``) and <time> when present, so the
+    GPX is usable for elevation/speed profiles and not just the map.
+
     Returns None if the FIT file contains fewer than 2 GPS points
     (e.g. indoor activities without GPS).
     """
     try:
         fit = fitparse.FitFile(io.BytesIO(fit_bytes))
-        points: list[tuple[float, float]] = []
+        points: list[tuple[float, float, float | None, str | None]] = []
         for record in fit.get_messages("record"):
             data = {f.name: f.value for f in record}
             lat = data.get("position_lat")
             lon = data.get("position_long")
             if lat is None or lon is None:
                 continue
-            points.append((lat * _SEMICIRCLES_TO_DEG, lon * _SEMICIRCLES_TO_DEG))
+            ele = data.get("altitude")
+            if ele is None:
+                ele = data.get("enhanced_altitude")
+            ts = data.get("timestamp")
+            time_str = None
+            if isinstance(ts, datetime):
+                # FIT timestamps are UTC; emit a Z-suffixed ISO string so
+                # gpxpy parses every point as timezone-aware and consistent.
+                if ts.tzinfo is not None:
+                    ts = ts.astimezone(timezone.utc)
+                time_str = ts.strftime("%Y-%m-%dT%H:%M:%SZ")
+            points.append((lat * _SEMICIRCLES_TO_DEG, lon * _SEMICIRCLES_TO_DEG, ele, time_str))
     except Exception as exc:
         logger.warning("FIT parse error: %s", exc)
         return None
@@ -82,8 +98,16 @@ def fit_to_gpx(fit_bytes: bytes) -> bytes | None:
         '<gpx version="1.1" creator="garmin-nostra">',
         "  <trk><trkseg>",
     ]
-    for lat, lon in points:
-        lines.append(f'    <trkpt lat="{lat:.7f}" lon="{lon:.7f}"/>')
+    for lat, lon, ele, time_str in points:
+        if ele is None and time_str is None:
+            lines.append(f'    <trkpt lat="{lat:.7f}" lon="{lon:.7f}"/>')
+            continue
+        lines.append(f'    <trkpt lat="{lat:.7f}" lon="{lon:.7f}">')
+        if ele is not None:
+            lines.append(f"      <ele>{ele:.1f}</ele>")
+        if time_str is not None:
+            lines.append(f"      <time>{time_str}</time>")
+        lines.append("    </trkpt>")
     lines += ["  </trkseg></trk>", "</gpx>"]
     return "\n".join(lines).encode()
 
