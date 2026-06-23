@@ -672,6 +672,9 @@ class ActivityStore:
     def map_path(self, user_name: str, activity_id: str) -> Path:
         return self.map_dir / user_name / f"{activity_id}.png"
 
+    def elevation_profile_path(self, user_name: str, activity_id: str) -> Path:
+        return self.map_dir / user_name / f"{activity_id}_elevation.png"
+
     # ── Sync audit log ───────────────────────────────────────────────────────
 
     def start_sync_run(self, user_id: int) -> int:

@@ -25,7 +25,8 @@ from storage import ActivityStore
 from caldav_push import CalDAVPusher
 from mastodon_bot import MastodonBot
 from kudos_machine import KudosMachine
-from map_render import fit_to_gpx, render_map
+from map_render import fit_to_gpx, render_map, render_elevation_profile
+from format import _is_speed_type
 
 LOG_FORMAT = "%(asctime)s %(levelname)-8s %(name)s: %(message)s"
 LOG_DATEFMT = "%Y-%m-%dT%H:%M:%S"
@@ -294,6 +295,17 @@ def process_user(
                     name_prefix="[Garmin] " if tag_source else None,
                 )
                 logger.info("[%s] New activity saved: %s", name, garmin_id)
+
+                elevation_path = None
+                if gpx_data and _is_speed_type(activity_row.get("activity_type") or ""):
+                    try:
+                        elevation_path = render_elevation_profile(
+                            gpx_data, store.elevation_profile_path(name, garmin_id),
+                        )
+                    except Exception as exc:
+                        logger.error("[%s] Elevation profile rendering failed for %s: %s", name, garmin_id, exc)
+                        elevation_path = None
+
                 if activity_row.get("suppressed"):
                     logger.info(
                         "[%s] Activity %s suppressed (%s), skipping integrations.",
@@ -312,6 +324,7 @@ def process_user(
                 activity_row = existing
                 logger.debug("[%s] Activity %s already known.", name, garmin_id)
                 map_path = store.map_path(name, garmin_id)
+                elevation_path = store.elevation_profile_path(name, garmin_id)
                 # Skip suppressed activities and those already fully processed
                 if existing.get("suppressed") or (existing["caldav_pushed"] and existing["mastodon_posted"]):
                     continue
@@ -352,7 +365,8 @@ def process_user(
                 try:
                     status_id = bot.post_activity(handle, activity_row, map_path,
                                                   visibility=_mastodon_visibility(user_cfg.get("mastodon_public", False)),
-                                                  extra_mentions=_parse_extra_mentions(user_cfg.get("mastodon_add_mention")))
+                                                  extra_mentions=_parse_extra_mentions(user_cfg.get("mastodon_add_mention")),
+                                                  elevation_profile_path=elevation_path)
                     store.mark_mastodon_posted(user_id, garmin_id, status_id=status_id)
                     if mastodon_post_delay_s > 0:
                         time.sleep(mastodon_post_delay_s)
@@ -515,11 +529,20 @@ def process_user_wahoo(
                         fit_data = None
 
                 map_path = None
+                elevation_path = None
                 if fit_data and activity_row.get("activity_type") != "indoor_cycling":
                     gpx_data = fit_to_gpx(fit_data)
                     if gpx_data:
                         map_path = store.map_path(name, wahoo_id)
                         map_path = render_map(gpx_data, map_path, timeout=request_timeout)
+                        if _is_speed_type(activity_row.get("activity_type") or ""):
+                            try:
+                                elevation_path = render_elevation_profile(
+                                    gpx_data, store.elevation_profile_path(name, wahoo_id),
+                                )
+                            except Exception as exc:
+                                logger.error("[%s] Elevation profile rendering failed for %s: %s", name, wahoo_id, exc)
+                                elevation_path = None
 
                 activity_row = store.save_wahoo_activity(user_id, activity_row, fit_path=fit_path)
                 logger.info("[%s] New Wahoo workout saved: %s", name, wahoo_id)
@@ -544,6 +567,7 @@ def process_user_wahoo(
                 activity_row = existing
                 logger.debug("[%s] Wahoo workout %s already known.", name, wahoo_id)
                 map_path = None
+                elevation_path = None
                 # Retry wahoo→garmin if still pending (independent of mastodon/caldav)
                 if (
                     garmin_for_upload
@@ -594,7 +618,8 @@ def process_user_wahoo(
                 try:
                     status_id = bot.post_activity(handle, activity_row, map_path,
                                                   visibility=_mastodon_visibility(user_cfg.get("mastodon_public", False)),
-                                                  extra_mentions=_parse_extra_mentions(user_cfg.get("mastodon_add_mention")))
+                                                  extra_mentions=_parse_extra_mentions(user_cfg.get("mastodon_add_mention")),
+                                                  elevation_profile_path=elevation_path)
                     store.mark_mastodon_posted(user_id, wahoo_id, status_id=status_id)
                     if mastodon_post_delay_s > 0:
                         time.sleep(mastodon_post_delay_s)

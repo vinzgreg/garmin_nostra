@@ -7,6 +7,7 @@ WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     sqlite3 \
+    fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
 
 # Non-root user (UID 1000 matches common desktop UID for bind-mount compat)

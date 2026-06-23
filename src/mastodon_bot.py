@@ -37,10 +37,12 @@ class MastodonBot:
         map_image_path: Path | None = None,
         visibility: str = "direct",
         extra_mentions: list[str] | None = None,
+        elevation_profile_path: Path | None = None,
     ) -> str | None:
         """
         Send a mention to *mastodon_handle* with the activity summary.
-        Attaches a map image if *map_image_path* exists.
+        Attaches a map image if *map_image_path* exists, and an elevation
+        profile image if *elevation_profile_path* exists.
         *visibility* is passed directly to the Mastodon API:
           "public"   — on the public timeline
           "unlisted" — accessible via link, shown to followers
@@ -63,6 +65,19 @@ class MastodonBot:
                 logger.debug("Map image uploaded: %s", map_image_path)
             except Exception as exc:
                 logger.warning("Map image upload failed: %s", exc)
+
+        if elevation_profile_path and elevation_profile_path.exists():
+            try:
+                with open(elevation_profile_path, "rb") as fh:
+                    media = self._client.media_post(
+                        fh,
+                        mime_type="image/png",
+                        description="Höhenprofil der Aktivität",
+                    )
+                media_ids.append(media["id"])
+                logger.debug("Elevation profile image uploaded: %s", elevation_profile_path)
+            except Exception as exc:
+                logger.warning("Elevation profile image upload failed: %s", exc)
 
         response = self._client.status_post(
             text,
