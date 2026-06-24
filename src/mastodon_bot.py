@@ -14,10 +14,10 @@ from format import build_mastodon_message
 logger = logging.getLogger(__name__)
 
 # Media uploads occasionally fail transiently (rate limit, hoster storage
-# hiccup, timeout). Retry a couple of times before giving up and posting
-# without the attachment.
-_MEDIA_UPLOAD_RETRIES = 2      # additional attempts after the first
-_MEDIA_UPLOAD_BACKOFF_S = 3    # wait between attempts
+# hiccup, timeout). Retry with an expanding gap before giving up and posting
+# without the attachment, to ride out multi-minute media-server outages.
+_MEDIA_UPLOAD_RETRIES = 5           # additional attempts after the first
+_MEDIA_UPLOAD_BACKOFF_STEP_S = 120  # wait grows per attempt: 2, 4, 6, 8, 10 min
 
 
 class MastodonBot:
@@ -55,11 +55,12 @@ class MastodonBot:
                 return media["id"]
             except Exception as exc:
                 if attempt < attempts:
+                    wait_s = attempt * _MEDIA_UPLOAD_BACKOFF_STEP_S
                     logger.warning(
-                        "Media upload failed (attempt %d/%d) for %s: %s — retrying in %ds.",
-                        attempt, attempts, image_path, exc, _MEDIA_UPLOAD_BACKOFF_S,
+                        "Media upload failed (attempt %d/%d) for %s: %s — retrying in %d min.",
+                        attempt, attempts, image_path, exc, wait_s // 60,
                     )
-                    time.sleep(_MEDIA_UPLOAD_BACKOFF_S)
+                    time.sleep(wait_s)
                 else:
                     logger.error(
                         "Media upload permanently failed after %d attempts for %s: %s "
