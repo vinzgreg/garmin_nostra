@@ -157,11 +157,13 @@ def _synthetic_gpx(gain_m: float, *, with_time: bool = True, points: int = 60) -
     return "\n".join(lines).encode()
 
 
-def test_render_elevation_profile_below_threshold_returns_none(tmp_path):
+def test_render_elevation_profile_renders_for_small_gain(tmp_path):
+    # A nearly flat ride still renders — the y-axis is forced to a minimum span.
     out = tmp_path / "profile.png"
     result = render_elevation_profile(_synthetic_gpx(gain_m=50.0), out)
-    assert result is None
-    assert not out.exists()
+    assert result == out
+    assert out.exists()
+    assert out.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
 
 
 def test_render_elevation_profile_renders_png(tmp_path):

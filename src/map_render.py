@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import logging
+import math
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -32,7 +33,9 @@ _PROFILE_TEXT_COLOR  = "#f2e9dc"   # warm off-white — avatar highlights
 _PROFILE_SPEED_COLOR = (242, 233, 220, 130)   # translucent off-white — speed line, 2nd y-axis
 _PROFILE_SPEED_LABEL_COLOR = "#f2e9dc"        # solid — speed axis labels/legend stay readable
 _PROFILE_SPEED_SMOOTHING_PTS = 11  # rolling-average window over GPX points
-_PROFILE_MIN_GAIN_M  = 100.0
+_PROFILE_MIN_AXIS_SPAN_M = 500.0   # y-axis always spans at least this many metres
+_PROFILE_GRID_STEP_M     = 100.0   # horizontal grid-line / label interval
+_PROFILE_AXIS_FILL       = 0.8     # data peak sits at ~80% of axis height (20% headroom)
 
 
 def _add_osm_attribution(image) -> None:
@@ -187,13 +190,11 @@ def _smoothed_speeds_kmh(points_data) -> list[float] | None:
 def render_elevation_profile(
     gpx_data: bytes,
     output_path: Path,
-    min_gain_m: float = _PROFILE_MIN_GAIN_M,
 ) -> Path | None:
     """
     Parse *gpx_data* and render an elevation profile to a PNG at *output_path*.
 
-    Skipped (returns None) if there is no elevation data, fewer than 2 points,
-    or the accumulated climb is below *min_gain_m*.
+    Skipped (returns None) if there is no elevation data or fewer than 2 points.
     """
     try:
         gpx = gpxpy.parse(gpx_data.decode("utf-8", errors="replace"))
@@ -207,19 +208,21 @@ def render_elevation_profile(
         return None
 
     uphill, _ = gpx.get_uphill_downhill()
-    if uphill < min_gain_m:
-        logger.debug(
-            "Accumulated climb %.0fm below threshold %.0fm — skipping profile render.",
-            uphill, min_gain_m,
-        )
-        return None
 
     distances = [p.distance_from_start / 1000.0 for p in points_data]   # km
     elevations = [p.point.elevation for p in points_data]
     speeds = _smoothed_speeds_kmh(points_data)
 
     min_ele, max_ele = min(elevations), max(elevations)
-    ele_span = max(max_ele - min_ele, 1.0)
+    # Y-axis: anchor the bottom on a 100 m boundary below the lowest point,
+    # then give the peak ~20% headroom (data tops out at ~80% of the height).
+    # Enforce a minimum span so gently rolling rides aren't exaggerated, and
+    # snap the span up to whole 100 m steps for clean grid-line delimiters.
+    axis_min = math.floor(min_ele / _PROFILE_GRID_STEP_M) * _PROFILE_GRID_STEP_M
+    axis_span = max((max_ele - axis_min) / _PROFILE_AXIS_FILL, _PROFILE_MIN_AXIS_SPAN_M)
+    axis_span = math.ceil(axis_span / _PROFILE_GRID_STEP_M) * _PROFILE_GRID_STEP_M
+    ele_span = axis_span
+    min_ele = axis_min
     max_dist = max(distances) or 1.0
     max_speed = max(speeds) if speeds else 0.0
     speed_axis_max = max(max_speed * 1.1, 1.0)
@@ -248,9 +251,10 @@ def render_elevation_profile(
         except OSError:
             font = title_font = ImageFont.load_default()
 
-        # Horizontal grid lines with elevation labels
-        for i in range(5):
-            ele = min_ele + ele_span * i / 4
+        # Horizontal grid lines with elevation labels, one per 100 m delimiter
+        num_lines = int(round(ele_span / _PROFILE_GRID_STEP_M)) + 1
+        for i in range(num_lines):
+            ele = axis_min + i * _PROFILE_GRID_STEP_M
             _, y = to_xy(0, ele)
             draw.line((_PROFILE_PADDING, y, _PROFILE_WIDTH - _PROFILE_PADDING, y), fill=_PROFILE_GRID_COLOR)
             draw.text((6, y - 12), f"{int(ele)} m", font=font, fill=_PROFILE_TEXT_COLOR)
