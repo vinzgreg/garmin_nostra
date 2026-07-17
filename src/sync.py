@@ -301,6 +301,7 @@ def process_user(
                     try:
                         elevation_path = render_elevation_profile(
                             gpx_data, store.elevation_profile_path(name, garmin_id),
+                            activity_row.get("elevation_gain_m"),
                         )
                     except Exception as exc:
                         logger.error("[%s] Elevation profile rendering failed for %s: %s", name, garmin_id, exc)
@@ -539,6 +540,7 @@ def process_user_wahoo(
                             try:
                                 elevation_path = render_elevation_profile(
                                     gpx_data, store.elevation_profile_path(name, wahoo_id),
+                                    activity_row.get("elevation_gain_m"),
                                 )
                             except Exception as exc:
                                 logger.error("[%s] Elevation profile rendering failed for %s: %s", name, wahoo_id, exc)

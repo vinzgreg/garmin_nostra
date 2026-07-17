@@ -36,6 +36,11 @@ _PROFILE_SPEED_SMOOTHING_PTS = 11  # rolling-average window over GPX points
 _PROFILE_MIN_AXIS_SPAN_M = 500.0   # y-axis always spans at least this many metres
 _PROFILE_GRID_STEP_M     = 100.0   # horizontal grid-line / label interval
 _PROFILE_AXIS_FILL       = 0.8     # data peak sits at ~80% of axis height (20% headroom)
+_PROFILE_SPEED_GRID_STEP_KMH  = 10.0   # speed-axis label interval
+_PROFILE_DIST_STEP_SMALL_KM   = 5.0    # x-axis label interval for shorter rides
+_PROFILE_DIST_STEP_LARGE_KM   = 10.0   # x-axis label interval once the ride exceeds the threshold
+_PROFILE_DIST_STEP_THRESHOLD_KM = 50.0  # ride length above which the wider x-axis step kicks in
+_PROFILE_MAX_SPEED_MARKER_COLOR = "#ffffff"
 
 
 def _add_osm_attribution(image) -> None:
@@ -190,9 +195,16 @@ def _smoothed_speeds_kmh(points_data) -> list[float] | None:
 def render_elevation_profile(
     gpx_data: bytes,
     output_path: Path,
+    elevation_gain_m: float | None,
 ) -> Path | None:
     """
     Parse *gpx_data* and render an elevation profile to a PNG at *output_path*.
+
+    *elevation_gain_m* is the platform-reported (Garmin/Wahoo) total ascent,
+    shown in the title so it matches the number in the Mastodon post text —
+    it is deliberately not recomputed from the GPX track, since a local
+    recompute (e.g. gpxpy's smoothed sum-of-positive-deltas) disagrees with
+    the platform's own figure and the two would otherwise look inconsistent.
 
     Skipped (returns None) if there is no elevation data or fewer than 2 points.
     """
@@ -207,7 +219,7 @@ def render_elevation_profile(
         logger.debug("GPX has fewer than 2 elevation points — skipping profile render.")
         return None
 
-    uphill, _ = gpx.get_uphill_downhill()
+    uphill = elevation_gain_m or 0.0
 
     distances = [p.distance_from_start / 1000.0 for p in points_data]   # km
     elevations = [p.point.elevation for p in points_data]
@@ -225,7 +237,8 @@ def render_elevation_profile(
     min_ele = axis_min
     max_dist = max(distances) or 1.0
     max_speed = max(speeds) if speeds else 0.0
-    speed_axis_max = max(max_speed * 1.1, 1.0)
+    speed_axis_max = math.ceil(max(max_speed * 1.1, _PROFILE_SPEED_GRID_STEP_KMH) / _PROFILE_SPEED_GRID_STEP_KMH) * _PROFILE_SPEED_GRID_STEP_KMH
+    dist_step = _PROFILE_DIST_STEP_LARGE_KM if max_dist > _PROFILE_DIST_STEP_THRESHOLD_KM else _PROFILE_DIST_STEP_SMALL_KM
 
     plot_w = _PROFILE_WIDTH - 2 * _PROFILE_PADDING
     plot_h = _PROFILE_HEIGHT - 2 * _PROFILE_PADDING
@@ -259,6 +272,12 @@ def render_elevation_profile(
             draw.line((_PROFILE_PADDING, y, _PROFILE_WIDTH - _PROFILE_PADDING, y), fill=_PROFILE_GRID_COLOR)
             draw.text((6, y - 12), f"{int(ele)} m", font=font, fill=_PROFILE_TEXT_COLOR)
 
+        # Vertical grid lines every dist_step km (5 km, or 10 km on longer rides)
+        num_dist_lines = int(math.floor(max_dist / dist_step)) + 1
+        for i in range(num_dist_lines):
+            x, _ = to_xy(i * dist_step, min_ele)
+            draw.line((x, _PROFILE_PADDING, x, _PROFILE_PADDING + plot_h), fill=_PROFILE_GRID_COLOR)
+
         # Filled area under the elevation line
         baseline_y = _PROFILE_PADDING + plot_h
         polygon = [to_xy(d, e) for d, e in zip(distances, elevations)]
@@ -271,16 +290,45 @@ def render_elevation_profile(
         if speeds:
             speed_line = [speed_to_xy(d, s) for d, s in zip(distances, speeds)]
             overlay_draw.line(speed_line, fill=_PROFILE_SPEED_COLOR, width=2)
-            for i in range(5):
-                speed = speed_axis_max * i / 4
+            num_speed_lines = int(round(speed_axis_max / _PROFILE_SPEED_GRID_STEP_KMH)) + 1
+            for i in range(num_speed_lines):
+                speed = i * _PROFILE_SPEED_GRID_STEP_KMH
                 _, y = speed_to_xy(0, speed)
                 draw.text((_PROFILE_WIDTH - _PROFILE_PADDING + 10, y - 12), f"{speed:.0f}", font=font, fill=_PROFILE_SPEED_LABEL_COLOR)
 
-        # X-axis distance labels
-        for i in range(5):
-            dist = max_dist * i / 4
+            # Mark the peak of the (smoothed) speed line with a dot + label.
+            max_speed_idx = max(range(len(speeds)), key=lambda i: speeds[i])
+            peak_speed = speeds[max_speed_idx]
+            mx, my = speed_to_xy(distances[max_speed_idx], peak_speed)
+            marker_r = 6
+            overlay_draw.ellipse(
+                (mx - marker_r, my - marker_r, mx + marker_r, my + marker_r),
+                fill=_PROFILE_MAX_SPEED_MARKER_COLOR,
+            )
+            label = f"{peak_speed:.1f} km/h"
+            label_bbox = draw.textbbox((0, 0), label, font=font)
+            label_w = label_bbox[2] - label_bbox[0]
+            label_x = min(max(mx - label_w / 2, _PROFILE_PADDING), _PROFILE_WIDTH - _PROFILE_PADDING - label_w)
+            label_y = my - marker_r - 26 if my - marker_r - 26 > _PROFILE_PADDING else my + marker_r + 8
+            draw.text((label_x, label_y), label, font=font, fill=_PROFILE_MAX_SPEED_MARKER_COLOR)
+
+        # X-axis distance labels, every dist_step km (5 km, or 10 km on longer
+        # rides). Grid lines stay at every dist_step; if ticks are too dense
+        # for the labels to fit without overlapping, thin the labels out to
+        # every 2nd/3rd/... tick while keeping all the grid lines.
+        widest_label = f"{(num_dist_lines - 1) * dist_step:.0f} km"
+        widest_bbox = draw.textbbox((0, 0), widest_label, font=font)
+        widest_w = widest_bbox[2] - widest_bbox[0]
+        tick_spacing_px = plot_w / (num_dist_lines - 1) if num_dist_lines > 1 else plot_w
+        label_stride = max(1, math.ceil((widest_w + 16) / tick_spacing_px)) if tick_spacing_px > 0 else 1
+        for i in range(0, num_dist_lines, label_stride):
+            dist = i * dist_step
             x, _ = to_xy(dist, min_ele)
-            draw.text((x - 24, _PROFILE_HEIGHT - _PROFILE_PADDING + 14), f"{dist:.1f} km", font=font, fill=_PROFILE_TEXT_COLOR)
+            label = f"{dist:.0f} km"
+            label_bbox = draw.textbbox((0, 0), label, font=font)
+            label_w = label_bbox[2] - label_bbox[0]
+            label_x = min(max(x - label_w / 2, 0), _PROFILE_WIDTH - label_w)
+            draw.text((label_x, _PROFILE_HEIGHT - _PROFILE_PADDING + 14), label, font=font, fill=_PROFILE_TEXT_COLOR)
 
         draw.text(
             (_PROFILE_PADDING, 28),

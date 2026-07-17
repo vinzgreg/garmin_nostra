@@ -160,7 +160,7 @@ def _synthetic_gpx(gain_m: float, *, with_time: bool = True, points: int = 60) -
 def test_render_elevation_profile_renders_for_small_gain(tmp_path):
     # A nearly flat ride still renders — the y-axis is forced to a minimum span.
     out = tmp_path / "profile.png"
-    result = render_elevation_profile(_synthetic_gpx(gain_m=50.0), out)
+    result = render_elevation_profile(_synthetic_gpx(gain_m=50.0), out, 50.0)
     assert result == out
     assert out.exists()
     assert out.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
@@ -168,7 +168,7 @@ def test_render_elevation_profile_renders_for_small_gain(tmp_path):
 
 def test_render_elevation_profile_renders_png(tmp_path):
     out = tmp_path / "profile.png"
-    result = render_elevation_profile(_synthetic_gpx(gain_m=200.0), out)
+    result = render_elevation_profile(_synthetic_gpx(gain_m=200.0), out, 200.0)
     assert result == out
     assert out.exists()
     assert out.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
@@ -177,15 +177,34 @@ def test_render_elevation_profile_renders_png(tmp_path):
 def test_render_elevation_profile_works_without_timestamps(tmp_path):
     # No <time> tags → speed cannot be computed, but the profile must still render.
     out = tmp_path / "profile.png"
-    result = render_elevation_profile(_synthetic_gpx(gain_m=200.0, with_time=False), out)
+    result = render_elevation_profile(_synthetic_gpx(gain_m=200.0, with_time=False), out, 200.0)
+    assert result == out
+    assert out.exists()
+
+
+def test_render_elevation_profile_uses_platform_reported_gain(tmp_path):
+    # The title must show the passed-in gain, not a local recompute from the
+    # GPX track — the two are known to disagree, and we want the Mastodon
+    # text stat and the chart title to always match.
+    out = tmp_path / "profile.png"
+    result = render_elevation_profile(_synthetic_gpx(gain_m=50.0), out, 141.0)
     assert result == out
     assert out.exists()
 
 
 def test_render_elevation_profile_bad_gpx_returns_none(tmp_path):
     out = tmp_path / "profile.png"
-    assert render_elevation_profile(b"not xml at all", out) is None
+    assert render_elevation_profile(b"not xml at all", out, 141.0) is None
     assert not out.exists()
+
+
+def test_render_elevation_profile_handles_missing_gain(tmp_path):
+    # elevation_gain_m can be None (e.g. missing from the activity summary);
+    # it must not blow up, and should fall back to 0.
+    out = tmp_path / "profile.png"
+    result = render_elevation_profile(_synthetic_gpx(gain_m=50.0), out, None)
+    assert result == out
+    assert out.exists()
 
 
 # ── _smoothed_speeds_kmh ─────────────────────────────────────────────────────────
