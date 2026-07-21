@@ -16,6 +16,12 @@ via map_render.fit_to_gpx() before computing the signature. Activities with
 neither file (e.g. indoor workouts) are skipped -- there is no track to
 compare.
 
+A batch of older Garmin activities (predating the current sync code, still
+using a legacy .fit.gz naming/storage convention) store that FIT file
+gzip-compressed. fitparse cannot read gzip directly, so those bytes are
+transparently gunzipped first -- detected by the gzip magic number, not the
+file extension, since it is a more reliable signal than a name.
+
 Every row is handled in its own try/except: a single corrupt or missing
 file is logged and skipped, never aborts the run.
 """
@@ -23,6 +29,7 @@ file is logged and skipped, never aborts the run.
 from __future__ import annotations
 
 import argparse
+import gzip
 import logging
 import sys
 from pathlib import Path
@@ -33,6 +40,15 @@ from map_render import fit_to_gpx  # noqa: E402
 from storage import ActivityStore  # noqa: E402
 from sync import load_config  # noqa: E402
 from track_signature import DEFAULT_CELL_SIZE_M, compute_track_cells  # noqa: E402
+
+_GZIP_MAGIC = b"\x1f\x8b"
+
+
+def _maybe_gunzip(data: bytes) -> bytes:
+    """Transparently decompress gzip-wrapped FIT bytes, if that's what this is."""
+    if data[:2] == _GZIP_MAGIC:
+        return gzip.decompress(data)
+    return data
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("backfill_track_cells")
@@ -101,6 +117,11 @@ def _gpx_bytes_for(row: dict, gpx_dir: Path, fit_dir: Path) -> tuple[bytes, str]
             fit_bytes = path.read_bytes()
         except OSError as exc:
             logger.warning("id=%s: could not read %s: %s", row["id"], path, exc)
+            return None
+        try:
+            fit_bytes = _maybe_gunzip(fit_bytes)
+        except OSError as exc:  # gzip.BadGzipFile etc. subclass OSError
+            logger.warning("id=%s: could not decompress %s: %s", row["id"], path, exc)
             return None
         gpx_bytes = fit_to_gpx(fit_bytes)
         if gpx_bytes is None:
