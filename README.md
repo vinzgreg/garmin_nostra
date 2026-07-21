@@ -73,13 +73,15 @@ $EDITOR config.toml // editor like nano, vim...
 I have this data directory as part of my home directory. Don't be confused, in the config-file it will refer to it as /data... not ~/data.
 
 ```bash
-mkdir -p ~/data/garminnostra
+mkdir -p ~/data/garminnostra ~/data/garmin-tokens
 ```
+
+Garmin/Wahoo OAuth tokens live in `~/data/garmin-tokens`, a separate directory from the rest of the data (`~/data/garminnostra`). Keeping it separate means anything that needs read access to the database, GPX, FIT, or map files can bind-mount `~/data/garminnostra` as a whole without ever being able to see the tokens.
 
 The container runs as non-root user `appuser` (UID 1000). If your host user has a different UID, adjust ownership:
 
 ```bash
-sudo chown -R 1000:1000 ~/data/garminnostra
+sudo chown -R 1000:1000 ~/data/garminnostra ~/data/garmin-tokens
 ```
 
 ### 3. Bootstrap Garmin tokens
@@ -93,10 +95,10 @@ source /tmp/garmin-bootstrap/bin/activate
 pip install requests
 
 # Run once per Garmin user — replace 'betty' with the user's name from config.toml:
-python3 src/bootstrap_auth.py -o ~/data/garminnostra/tokens/betty
+python3 src/bootstrap_auth.py -o ~/data/garmin-tokens/betty
 
 # Optionally specify a browser (default: system default):
-python3 src/bootstrap_auth.py -o ~/data/garminnostra/tokens/betty --browser firefox
+python3 src/bootstrap_auth.py -o ~/data/garmin-tokens/betty --browser firefox
 ```
 
 The script opens a browser to the Garmin SSO login page.
@@ -373,11 +375,11 @@ Create the bot account on your preferred instance, go to **Preferences → Devel
 | `gpx_dir` | `/data/gpx` | GPX files |
 | `fit_dir` | `/data/fit` | FIT files |
 | `map_dir` | `/data/maps` | Map images |
-| `token_dir` | `/data/tokens` | Garmin OAuth tokens (one subdirectory per user `name`) |
+| `token_dir` | `/tokens` | Garmin OAuth tokens (one subdirectory per user `name`) |
 | `log_level` | `info` | Log verbosity: `debug`, `info`, or `error` |
 | `log_file` | `/data/garmin_nostra.log` | *(optional)* Write logs to this file in addition to stdout |
 
-> **Critical:** All paths must start with `/data/`. The container's only access to the host filesystem is through the volume mount `~/data/garminnostra → /data`. Do **not** use `~`, `~/data/...`, `/home/vinz/...`, or any other host path — those paths do not exist inside the container and the token/file lookup will silently fail.
+> **Critical:** `db_path`, `gpx_dir`, `fit_dir`, `map_dir`, and `log_file` must start with `/data/` — the container's access to that data comes from the volume mount `~/data/garminnostra → /data`. `token_dir` is the one exception: it must start with `/tokens`, backed by its own separate mount, `~/data/garmin-tokens → /tokens` (see [Data directory layout](#data-directory-layout) for why it's split out). Do **not** use `~`, `/home/vinz/...`, or any other host path for any of these — those paths do not exist inside the container and the token/file lookup will silently fail.
 >
 > The corresponding host paths are:
 > | Container path | Host path |
@@ -386,7 +388,7 @@ Create the bot account on your preferred instance, go to **Preferences → Devel
 > | `/data/gpx/` | `~/data/garminnostra/gpx/` |
 > | `/data/fit/` | `~/data/garminnostra/fit/` |
 > | `/data/maps/` | `~/data/garminnostra/maps/` |
-> | `/data/tokens/<name>/` | `~/data/garminnostra/tokens/<name>/` |
+> | `/tokens/<name>/` | `~/data/garmin-tokens/<name>/` |
 
 ### `[caldav]` *(optional)*
 
@@ -437,17 +439,20 @@ One block per account (Garmin or Wahoo):
 │   │   └── 12345678.fit
 │   └── bob/
 │       └── 87654321.fit
-├── maps/
-│   ├── alice/
-│   │   └── 12345678.png
-│   └── bob/
-│       └── 87654321.png
-└── tokens/
-    ├── alice/            # Garmin OAuth tokens
+└── maps/
+    ├── alice/
+    │   └── 12345678.png
     └── bob/
+        └── 87654321.png
+
+~/data/garmin-tokens/
+├── alice/                # Garmin OAuth tokens
+└── bob/
 ```
 
-The data directory is bind-mounted from the host (`~/data/garminnostra` by default — change the left side of the volume in `docker-compose.yml` to relocate it). All files survive container rebuilds.
+Tokens live in a separate directory, `~/data/garmin-tokens`, mounted into the container at `/tokens` rather than nested under `/data`. This lets anything else that needs read access to the activity data — e.g. a reporting tool, or an MCP server exposing it to an LLM — bind-mount all of `~/data/garminnostra` without ever being able to see a Garmin/Wahoo OAuth token. Nesting the tokens directory under `/data` instead would defeat that: Docker creates a mountpoint directory for any nested bind mount on the host side of its parent bind mount, so a `tokens/` entry (empty, but present) would always reappear inside `~/data/garminnostra` on every container start.
+
+Both data directories are bind-mounted from the host (`~/data/garminnostra` and `~/data/garmin-tokens` by default — change the left side of the corresponding volume in `docker-compose.yml` to relocate either one). All files survive container rebuilds.
 
 ---
 
@@ -660,7 +665,7 @@ Garmin's SSO is protected by Cloudflare, which can block programmatic logins. Ru
 If you already have working tokens from a previous installation, you can copy them directly:
 
 ```bash
-cp ~/old/path/tokens/<name>/garmin_tokens.json ~/data/garminnostra/tokens/<name>/garmin_tokens.json
+cp ~/old/path/tokens/<name>/garmin_tokens.json ~/data/garmin-tokens/<name>/garmin_tokens.json
 ```
 
 After this, the next sync will load the saved tokens and skip the credential login entirely.

@@ -56,7 +56,7 @@ db_path   = "/data/garmin_nostra.db"
 gpx_dir   = "/data/gpx"
 fit_dir   = "/data/fit"
 map_dir   = "/data/maps"
-token_dir = "/data/tokens"
+token_dir = "/tokens"
 # log_level = "info"           # debug, info, or error
 # log_file  = "/data/garmin_nostra.log"
 

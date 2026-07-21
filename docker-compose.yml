@@ -5,6 +5,15 @@ services:
     restart: unless-stopped
     volumes:
       - ~/data/garminnostra:/data
+      # Split out from ~/data/garminnostra so nostra-mcp can bind-mount the
+      # rest of that directory (db, gpx, fit, maps) without ever seeing these
+      # Garmin/Wahoo OAuth tokens. Mounted at a top-level path, not /data/tokens:
+      # nesting it under /data would make Docker create a "tokens" mountpoint
+      # directory on the /data bind's host side (~/data/garminnostra/tokens)
+      # to mount onto, which would then be visible -- empty, but visible -- to
+      # anyone bind-mounting all of ~/data/garminnostra elsewhere. token_dir in
+      # config.toml is now /tokens accordingly.
+      - ~/data/garmin-tokens:/tokens
       - ./config.toml:/app/config.toml:ro
     environment:
       - CONFIG_FILE=/app/config.toml
