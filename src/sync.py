@@ -26,6 +26,7 @@ from caldav_push import CalDAVPusher
 from mastodon_bot import MastodonBot
 from kudos_machine import KudosMachine
 from map_render import fit_to_gpx, render_map, render_elevation_profile
+from track_signature import compute_track_cells, DEFAULT_CELL_SIZE_M
 from format import _is_speed_type
 
 LOG_FORMAT = "%(asctime)s %(levelname)-8s %(name)s: %(message)s"
@@ -296,6 +297,21 @@ def process_user(
                 )
                 logger.info("[%s] New activity saved: %s", name, garmin_id)
 
+                if gpx_data:
+                    try:
+                        signature = compute_track_cells(gpx_data)
+                        if signature:
+                            saved_row = store.get_activity(user_id, garmin_id)
+                            cells, point_count = signature
+                            store.save_track_signature(
+                                saved_row["id"], DEFAULT_CELL_SIZE_M, cells, point_count, "gpx",
+                            )
+                    except Exception as exc:
+                        logger.error(
+                            "[%s] Track signature computation failed for %s: %s",
+                            name, garmin_id, exc,
+                        )
+
                 elevation_path = None
                 if gpx_data and _is_speed_type(activity_row.get("activity_type") or ""):
                     try:
@@ -531,6 +547,7 @@ def process_user_wahoo(
 
                 map_path = None
                 elevation_path = None
+                gpx_data = None
                 if fit_data and activity_row.get("activity_type") != "indoor_cycling":
                     gpx_data = fit_to_gpx(fit_data)
                     if gpx_data:
@@ -548,6 +565,21 @@ def process_user_wahoo(
 
                 activity_row = store.save_wahoo_activity(user_id, activity_row, fit_path=fit_path)
                 logger.info("[%s] New Wahoo workout saved: %s", name, wahoo_id)
+
+                if gpx_data:
+                    try:
+                        signature = compute_track_cells(gpx_data)
+                        if signature:
+                            saved_row = store.get_wahoo_activity(user_id, wahoo_id)
+                            cells, point_count = signature
+                            store.save_track_signature(
+                                saved_row["id"], DEFAULT_CELL_SIZE_M, cells, point_count, "fit",
+                            )
+                    except Exception as exc:
+                        logger.error(
+                            "[%s] Track signature computation failed for %s: %s",
+                            name, wahoo_id, exc,
+                        )
 
                 # ── Wahoo → Garmin sync ───────────────────────────────────
                 if garmin_for_upload and fit_data and not activity_row.get("wahoo_synced_to_garmin"):

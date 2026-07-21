@@ -519,6 +519,72 @@ Permanently inaccessible Wahoo workouts (401 Unauthorized). Checked before makin
 ### `sync_runs`
 Audit log — one row per sync attempt per user.
 
+### `activity_track_signatures`
+Precomputed GPS-track "signature" for route/overlap comparison (e.g. by
+nostra-mcp's `find_similar_activities` tool). One row per activity that has
+usable track data — computed automatically at sync time (see below), no
+configuration needed. Deliberately a separate table rather than columns on
+`activities`: it is a derived, versioned artifact tied to `cell_size_m`, not
+a scalar metric, and most callers reading an activity have no use for it.
+
+| Column | Type | Description |
+|---|---|---|
+| `activity_id` | INTEGER PK | FK to `activities.id` |
+| `cell_size_m` | REAL | Grid cell size (metres) used to compute `cells` — currently 35.0 |
+| `cells` | TEXT | Sorted, comma-joined `"x:y"` grid-cell ids the track passes through |
+| `point_count` | INTEGER | Raw GPX trackpoints parsed; a low number flags a suspiciously short track |
+| `source_format` | TEXT | `gpx` (Garmin's native file) or `fit` (Wahoo — see below) |
+| `computed_at` | TEXT | ISO-8601 UTC timestamp |
+
+**How the signature works:** each trackpoint is projected with a simple
+equirectangular transform and quantized to a `cell_size_m` grid cell; the
+signature is the *set* of unique cells the track touches. Comparing two
+signatures is then a Jaccard similarity (`|A∩B| / |A∪B|`) on two small sets
+of `"x:y"` strings — order-independent (a loop ridden in either direction
+scores the same) and naturally tolerant of partial overlap (an early
+turnaround just shrinks the intersection). See `src/track_signature.py`.
+
+**Garmin vs. Wahoo data source:** Garmin activities have a native `.gpx`
+file on disk (`gpx_path`), read directly. Wahoo activities only ever persist
+`.fit` (`fit_path`) — GPX exists only transiently in memory (derived via
+`map_render.fit_to_gpx()` for map/elevation-profile rendering) and is never
+saved to disk, so the signature is computed from that same in-memory GPX
+before it's discarded. Indoor Wahoo rides (`indoor_cycling`) have no GPS
+track to convert and correctly get no signature.
+
+**Backfilling existing activities:** `scripts/backfill_track_cells.py`
+computes signatures for activities that predate this feature (or after
+changing `cell_size_m`, which invalidates every existing signature).
+Idempotent — only processes activities with no signature row yet, so a
+rerun after a first pass touches 0 rows — and never modifies `activities`,
+only adds rows to `activity_track_signatures`.
+
+```bash
+# From the repo root, run inside the container image (has gpxpy/fitparse):
+docker compose run --rm --entrypoint python3 garmin-nostra \
+  /app/scripts/backfill_track_cells.py /app/config.toml --dry-run   # report only, writes nothing
+docker compose run --rm --entrypoint python3 garmin-nostra \
+  /app/scripts/backfill_track_cells.py /app/config.toml --limit 20  # small real batch
+docker compose run --rm --entrypoint python3 garmin-nostra \
+  /app/scripts/backfill_track_cells.py /app/config.toml             # full run
+```
+
+> **Note the `--entrypoint python3` override.** This image's `ENTRYPOINT` is
+> `/entrypoint.sh`, which runs the normal sync loop unconditionally and
+> ignores any command passed via a plain `docker compose run garmin-nostra
+> ...` — the arguments get silently appended to the entrypoint script rather
+> than replacing it, starting a second, redundant sync loop instead of the
+> script. Always pass `--entrypoint python3` when running a one-off script
+> this way.
+
+A small number of older rows may have `gpx_path`/`fit_path` stored as a host
+absolute path (`/home/<user>/data/garminnostra/gpx/...`) rather than the
+container path (`/data/gpx/...`) every other row uses — a pre-existing data
+inconsistency, not something this feature introduced or corrects. The
+backfill script tolerates it: if the stored path isn't readable, it falls
+back to reconstructing `<gpx_dir>/<user-dir>/<filename>` from the path's
+last two components before giving up.
+
 ---
 
 ## Useful SQL queries

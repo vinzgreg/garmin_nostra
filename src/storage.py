@@ -99,6 +99,22 @@ CREATE TABLE IF NOT EXISTS activities (
     UNIQUE(user_id, garmin_activity_id)
 );
 
+-- Precomputed GPS-track "signature" for route/overlap comparison (e.g. by
+-- nostra-mcp's find_similar_activities tool). One row per activity that has
+-- usable track data; deliberately its own table rather than columns on
+-- activities -- it is a derived, versioned artifact (tied to cell_size_m),
+-- not a scalar metric, and most callers reading an activity have no use for
+-- it. INSERT OR REPLACE on recompute (see save_track_signature) so changing
+-- cell_size_m and re-running the backfill overwrites stale rows cleanly.
+CREATE TABLE IF NOT EXISTS activity_track_signatures (
+    activity_id   INTEGER PRIMARY KEY REFERENCES activities(id),
+    cell_size_m   REAL    NOT NULL,
+    cells         TEXT    NOT NULL,   -- sorted comma-joined "x:y" grid cell ids
+    point_count   INTEGER NOT NULL,   -- raw trackpoints parsed; flags suspiciously-short tracks
+    source_format TEXT    NOT NULL,   -- 'gpx' | 'fit' -- which file it was actually derived from
+    computed_at   TEXT    NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS kudos_sent (
     status_id   TEXT NOT NULL,
     account_id  TEXT NOT NULL,
@@ -562,6 +578,39 @@ class ActivityStore:
             )
 
         return mapped_row
+
+    # ── Track signatures (route/overlap comparison) ──────────────────────────
+
+    def save_track_signature(
+        self,
+        activity_id: int,
+        cell_size_m: float,
+        cells: str,
+        point_count: int,
+        source_format: str,
+    ) -> None:
+        """Store (or replace) a precomputed track signature for one activity.
+
+        OR REPLACE, not IGNORE: re-running the backfill after a
+        cell_size_m change must overwrite a stale row, not skip it.
+        """
+        self._conn.execute(
+            "INSERT OR REPLACE INTO activity_track_signatures "
+            "(activity_id, cell_size_m, cells, point_count, source_format, computed_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                activity_id, cell_size_m, cells, point_count, source_format,
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+        self._conn.commit()
+
+    def has_track_signature(self, activity_id: int) -> bool:
+        row = self._conn.execute(
+            "SELECT 1 FROM activity_track_signatures WHERE activity_id = ?",
+            (activity_id,),
+        ).fetchone()
+        return row is not None
 
     def mark_wahoo_synced_to_garmin(self, user_id: int, wahoo_id: str) -> None:
         """Mark a Wahoo-sourced activity as successfully uploaded to Garmin."""

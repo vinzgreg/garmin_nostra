@@ -17,7 +17,58 @@ def test_store_creates_tables(store):
     tables = {r[0] for r in conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table'"
     ).fetchall()}
-    assert {"users", "activities", "sync_runs", "kudos_sent", "wahoo_skipped"} <= tables
+    assert {
+        "users", "activities", "sync_runs", "kudos_sent", "wahoo_skipped",
+        "activity_track_signatures",
+    } <= tables
+
+
+def test_migrate_is_idempotent(tmp_path):
+    """Constructing a second ActivityStore against the same DB must not error."""
+    from storage import ActivityStore
+
+    db_path = str(tmp_path / "idempotent.db")
+    kwargs = dict(
+        gpx_dir=str(tmp_path / "gpx"), fit_dir=str(tmp_path / "fit"),
+        map_dir=str(tmp_path / "maps"), token_dir=str(tmp_path / "tokens"),
+    )
+    s1 = ActivityStore(db_path=db_path, **kwargs)
+    s1.close()
+    s2 = ActivityStore(db_path=db_path, **kwargs)  # re-open: _DDL/_migrate must be safe to rerun
+    tables = {r[0] for r in s2._conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+    ).fetchall()}
+    assert "activity_track_signatures" in tables
+    s2.close()
+
+
+# ── Track signatures ──────────────────────────────────────────────────────────
+
+def test_save_and_check_track_signature(store, user_id, garmin_running):
+    row = store.save_activity(user_id, garmin_running)
+    fetched = store.get_activity(user_id, str(garmin_running["activityId"]))
+
+    assert store.has_track_signature(fetched["id"]) is False
+    store.save_track_signature(fetched["id"], 35.0, "1:1,2:2", 2, "gpx")
+    assert store.has_track_signature(fetched["id"]) is True
+
+
+def test_save_track_signature_replaces_on_recompute(store, user_id, garmin_running):
+    store.save_activity(user_id, garmin_running)
+    fetched = store.get_activity(user_id, str(garmin_running["activityId"]))
+
+    store.save_track_signature(fetched["id"], 35.0, "1:1", 1, "gpx")
+    store.save_track_signature(fetched["id"], 50.0, "9:9,8:8", 2, "fit")
+
+    row = store._conn.execute(
+        "SELECT cell_size_m, cells, point_count, source_format FROM activity_track_signatures "
+        "WHERE activity_id = ?",
+        (fetched["id"],),
+    ).fetchone()
+    assert row["cell_size_m"] == 50.0
+    assert row["cells"] == "9:9,8:8"
+    assert row["point_count"] == 2
+    assert row["source_format"] == "fit"
 
 
 def test_wal_mode_enabled(store):
