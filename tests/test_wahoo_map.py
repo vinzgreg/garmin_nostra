@@ -91,9 +91,13 @@ def test_map_wahoo_cycling_values(wahoo_workout_cycling, wahoo_summary_cycling):
     assert row["elevation_gain_m"] == pytest.approx(420.0, rel=1e-3)
 
 
-def test_map_wahoo_cycling_activity_name_prefix(wahoo_workout_cycling, wahoo_summary_cycling):
+def test_map_wahoo_cycling_activity_name_is_raw(wahoo_workout_cycling, wahoo_summary_cycling):
+    """map_wahoo_activity returns the raw workout name — the "[Wahoo] " source
+    tag is applied later, at save time, only when tagging is requested."""
     row = map_wahoo_activity(1, wahoo_workout_cycling, wahoo_summary_cycling)
-    assert row["activity_name"].startswith("[Wahoo]")
+    assert not row["activity_name"].startswith("[Wahoo]")
+    assert row["activity_name"] == (wahoo_workout_cycling.get("name")
+                                    or wahoo_summary_cycling.get("name"))
 
 
 def test_map_wahoo_cycling_timezone(wahoo_workout_cycling, wahoo_summary_cycling):

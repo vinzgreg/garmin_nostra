@@ -292,6 +292,36 @@ class ActivityStore:
                 logger.info("Migration: added %s column to activities.", col)
             except sqlite3.OperationalError:
                 pass  # Column already exists
+
+        # One-time data backfills below are full-table scans. Gate them behind
+        # PRAGMA user_version so they run once on an upgraded DB, not on every
+        # process start (a correlated EXISTS over activities per row, ×N starts,
+        # is pure waste — they are idempotent but not free).
+        try:
+            version = self._conn.execute("PRAGMA user_version").fetchone()[0]
+        except sqlite3.OperationalError as exc:
+            logger.warning("Could not read user_version, skipping data backfills: %s", exc)
+            return
+        if version >= 1:
+            return
+        try:
+            self._run_data_backfills()
+        except sqlite3.OperationalError as exc:
+            # Don't let a data-backfill hiccup take down every sync via __init__.
+            # Leave user_version unbumped so it retries on a later start.
+            logger.warning("Data-backfill migration skipped (will retry next start): %s", exc)
+            return
+        self._conn.execute("PRAGMA user_version = 1")
+        self._conn.commit()
+
+    def _run_data_backfills(self) -> None:
+        """One-time idempotent data backfills for pre-existing databases.
+
+        Run once, gated by PRAGMA user_version (see _migrate). Every raw_json
+        read is guarded by json_valid() so a single malformed payload skips
+        that row instead of aborting the whole UPDATE (and, before this guard,
+        crashing ActivityStore construction).
+        """
         # Backfill source for activities imported before the column existed
         self._conn.execute(
             "UPDATE activities SET source = 'GarminNoStra' WHERE source IS NULL"
@@ -324,6 +354,7 @@ class ActivityStore:
             SET avg_power_w = CAST(json_extract(raw_json, '$.avgPower') AS REAL)
             WHERE avg_power_w IS NULL
               AND source = 'GarminNoStra'
+              AND json_valid(raw_json)
               AND json_extract(raw_json, '$.avgPower') IS NOT NULL
         """)
         # Same for cadence: Garmin returns averageRunningCadenceInStepsPerMinute
@@ -336,6 +367,7 @@ class ActivityStore:
             )
             WHERE avg_cadence IS NULL
               AND source = 'GarminNoStra'
+              AND json_valid(raw_json)
               AND (json_extract(raw_json, '$.averageRunningCadenceInStepsPerMinute') IS NOT NULL
                 OR json_extract(raw_json, '$.averageBikingCadenceInRevPerMinute') IS NOT NULL)
         """)
@@ -347,6 +379,7 @@ class ActivityStore:
             )
             WHERE max_cadence IS NULL
               AND source = 'GarminNoStra'
+              AND json_valid(raw_json)
               AND (json_extract(raw_json, '$.maxRunningCadenceInStepsPerMinute') IS NOT NULL
                 OR json_extract(raw_json, '$.maxBikingCadenceInRevPerMinute') IS NOT NULL)
         """)
@@ -568,12 +601,17 @@ class ActivityStore:
         return dict(row) if row else None
 
     def save_wahoo_activity(
-        self, user_id: int, mapped_row: dict, gpx_path: Path | None = None, fit_path: Path | None = None
+        self, user_id: int, mapped_row: dict, gpx_path: Path | None = None,
+        fit_path: Path | None = None, name_prefix: str | None = None,
     ) -> dict:
         """Insert a Wahoo activity into DB (ignore if already exists).
 
         *mapped_row* must be the output of wahoo.map_wahoo_activity().
+        *name_prefix* (e.g. "[Wahoo] ") is prepended to activity_name when set,
+        mirroring save_activity()'s handling of the Garmin "[Garmin] " tag.
         """
+        if name_prefix:
+            mapped_row["activity_name"] = name_prefix + (mapped_row.get("activity_name") or "Workout")
         if gpx_path:
             mapped_row["gpx_path"] = str(gpx_path)
         if fit_path:
@@ -712,7 +750,13 @@ class ActivityStore:
         params: list = [user_id]
         if max_age_days is not None:
             from datetime import timedelta
-            cutoff = (datetime.now(timezone.utc) - timedelta(days=max_age_days)).isoformat()
+            # start_time_utc is stored space-separated ("2026-07-21 10:00:00"),
+            # so the cutoff must use the same format — an isoformat() cutoff
+            # ("...T...+00:00") would compare wrong under SQLite's lexicographic
+            # string comparison (' ' < 'T'), excluding the whole boundary day.
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=max_age_days)).strftime(
+                "%Y-%m-%d %H:%M:%S"
+            )
             query += " AND start_time_utc >= ?"
             params.append(cutoff)
         rows = self._conn.execute(query, params).fetchall()
@@ -747,13 +791,24 @@ class ActivityStore:
         )
         self._conn.commit()
 
-    def get_last_sync_time(self, user_id: int) -> datetime:
-        """Return start_time_utc of the most recent activity for *user_id*, or epoch."""
-        row = self._conn.execute(
+    def get_last_sync_time(self, user_id: int, source: str | None = None) -> datetime:
+        """Return start_time_utc of the most recent activity for *user_id*, or epoch.
+
+        Pass *source* ('GarminNoStra' / 'WahooNoStra') to scope the lookup to
+        one source. This matters under source='both', where Garmin and Wahoo
+        share a user_id: without the filter, a fresh Garmin activity would drag
+        the Wahoo sync window forward and Wahoo workouts behind it would be
+        dropped by get_workouts_since's start-time filter (and vice versa).
+        """
+        query = (
             "SELECT start_time_utc FROM activities WHERE user_id = ? "
-            "ORDER BY start_time_utc DESC LIMIT 1",
-            (user_id,),
-        ).fetchone()
+        )
+        params: list = [user_id]
+        if source:
+            query += "AND source = ? "
+            params.append(source)
+        query += "ORDER BY start_time_utc DESC LIMIT 1"
+        row = self._conn.execute(query, params).fetchone()
         if row and row[0]:
             try:
                 return datetime.fromisoformat(

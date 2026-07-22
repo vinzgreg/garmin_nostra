@@ -192,8 +192,18 @@ class WahooClient:
 
                 result.extend(workouts)
 
-                total = data.get("total", 0)
-                if page * per_page >= total:
+                # Stop once we've seen every workout the API reports. If `total`
+                # is absent (unexpected shape), don't treat a missing value as 0
+                # — that would silently truncate at the first page. Keep
+                # paginating and let the `if not workouts: break` guard above
+                # terminate on the first empty page instead.
+                total = data.get("total")
+                if total is None:
+                    logger.warning(
+                        "Wahoo workout list page %d missing 'total'; "
+                        "paginating until an empty page.", page,
+                    )
+                elif page * per_page >= total:
                     break
                 page += 1
 
@@ -326,7 +336,18 @@ def wahoo_activity_type(workout_type_id: int | None) -> str:
     """Map a Wahoo workout_type_id to a Garmin-compatible activity type key."""
     if workout_type_id is None:
         return "workout"
-    return _WAHOO_TYPE_MAP.get(workout_type_id, "workout")
+    mapped = _WAHOO_TYPE_MAP.get(workout_type_id)
+    if mapped is None:
+        # A new/unmapped Wahoo type shouldn't vanish silently: it feeds
+        # _is_speed_type, elevation-profile rendering and suppress-type
+        # matching downstream. Log so the ID is discoverable and can be
+        # added to _WAHOO_TYPE_MAP.
+        logger.info(
+            "Unknown Wahoo workout_type_id=%s; defaulting to 'workout'.",
+            workout_type_id,
+        )
+        return "workout"
+    return mapped
 
 
 def _safe_float(value: Any) -> float | None:
@@ -356,6 +377,13 @@ def map_wahoo_activity(user_id: int, workout: dict, summary: dict) -> dict:
     workout_type_id = workout.get("workout_type_id")
     activity_type = wahoo_activity_type(workout_type_id)
 
+    # Wahoo reports smart-trainer (KICKR) sessions under a generic/outdoor
+    # cycling type ID rather than an indoor one, so the numeric type map alone
+    # would render them with a map/elevation profile they have no GPS for.
+    # The device name in the workout title is the only reliable indoor tell,
+    # hence this string heuristic. It's a title match, so a user who renames a
+    # workout can defeat it — acceptable, as the fallback is just the outdoor
+    # cycling type.
     workout_name = workout.get("name") or summary.get("name") or ""
     if "KICKR" in workout_name.upper():
         activity_type = "indoor_cycling"
@@ -387,7 +415,10 @@ def map_wahoo_activity(user_id: int, workout: dict, summary: dict) -> dict:
     return {
         "user_id":                 user_id,
         "garmin_activity_id":      workout_id,
-        "activity_name":           "[Wahoo] " + (workout.get("name") or summary.get("name") or "Workout"),
+        # Raw name only — any "[Wahoo] " source tag is applied at save time
+        # (ActivityStore.save_wahoo_activity), the same way Garmin's "[Garmin] "
+        # tag is, so it appears only when source tagging is requested.
+        "activity_name":           workout.get("name") or summary.get("name") or "Workout",
         "activity_type":           activity_type,
         "sport_type":              activity_type,
         "start_time_utc":          start_utc,

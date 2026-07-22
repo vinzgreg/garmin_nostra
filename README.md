@@ -22,7 +22,10 @@ Messages and calendar entries are formatted in **German** with metric units.
 | Mastodon post | Bot mentions the user; visibility is `public`, `unlisted`, or `direct` (DM) per user |
 | Activity stats | Duration, distance, pace/speed, elevation, power, heart rate |
 | Map image | GPX track rendered as PNG, attached to the DM |
+| Elevation profile | Elevation + speed profile PNG for distance-based activities |
 | GPX + FIT files | Original GPX and FIT files downloaded and stored per activity |
+| Track signatures | Grid-cell GPS signature precomputed per activity for route-similarity comparison |
+| Insights | Per-kilometre pace/HR/cadence/power splits + negative-split/HR-drift flags, precomputed at sync time |
 | KudosMachine | Polls activity posts for favourites and auto-replies with a kudos message mentioning the fav-giver; 100 random German messages or a custom template. Only active when `mastodon_public` is `true` or `"listed"` — DMs cannot be favourited. |
 | CalDAV | Optional per-user; pushes VEVENT to an iCal compatible calendar |
 | SQLite | All Garmin data stored; queryable by user, type, time |
@@ -702,9 +705,13 @@ Expected output:
 | File | What it covers |
 |---|---|
 | `tests/test_format.py` | German formatting helpers and `build_mastodon_message` |
-| `tests/test_storage.py` | `ActivityStore` — save/get, deduplication, power backfill, cross-source suppression |
+| `tests/test_storage.py` | `ActivityStore` — save/get, deduplication, power backfill, cross-source suppression, migration resilience, source-scoped sync window |
 | `tests/test_wahoo_map.py` | `map_wahoo_activity`, Wahoo type mapping, safe-conversion helpers |
 | `tests/test_sync_logic.py` | Full sync flow with mocked API clients (Garmin, Wahoo, Mastodon, CalDAV) |
+| `tests/test_insights.py` | Per-km split computation from GPX and FIT, trend flags, non-positive-duration edges |
+| `tests/test_track_signature.py` | Grid-cell track signatures, Jaccard overlap, malformed-input handling |
+| `tests/test_map_render.py` | FIT→GPX conversion and map/elevation rendering |
+| `tests/test_mastodon_bot.py` | Media upload/retry and post assembly |
 
 Fixtures in `tests/fixtures/` are anonymized JSON files — no real GPS coordinates, account names, or activity IDs.
 
@@ -714,8 +721,12 @@ Fixtures in `tests/fixtures/` are anonymized JSON files — no real GPS coordina
 - **Outdoor cycling** — distance, speed, elevation
 - **Indoor cycling** — initial save without power (`avg_power_w = NULL`), then filled by `backfill_activity_metrics` on the second sync cycle
 - **No double-insert** — `INSERT OR IGNORE` verified for both Garmin and Wahoo activities
-- **Cross-source dedup** — Wahoo activity suppresses overlapping Garmin entry, regardless of which arrived first
+- **Cross-source dedup** — an overlapping Garmin activity is persisted as `suppressed` (not silently dropped) and not posted, regardless of which source arrived first
+- **Source-scoped sync window** — under `source = "both"`, the Garmin and Wahoo sync windows are tracked independently so neither drags the other forward
 - **Wahoo→Garmin bridge** — FIT file uploaded on first sync, duplicate error handled gracefully, no retry after success
+- **Retry re-attaches media** — a Wahoo post that failed once re-attaches the map rendered on the first run instead of going text-only
+- **Insights from FIT** — per-km splits parsed directly from FIT `record` messages (the Wahoo path), including graceful handling of missing sensors and non-positive split durations
+- **Migration resilience** — a row with malformed `raw_json` does not crash store construction (json_extract backfills are `json_valid`-guarded)
 - **10-minute gate** — activities younger than 10 minutes are skipped until the next cycle
 - **Indoor cycling deferral** — integrations (Mastodon, CalDAV) deferred to next cycle so Garmin finishes computing power
 
@@ -750,9 +761,12 @@ Integration tests that hit the real Garmin or Wahoo APIs are not included in the
 | `src/garmin.py` | Garmin Connect client with per-user token caching |
 | `src/wahoo.py` | Wahoo Cloud API client with OAuth 2.0 token refresh |
 | `src/wahoo_auth.py` | One-time OAuth bootstrap helper to obtain Wahoo refresh tokens |
+| `src/bootstrap_auth.py` | One-time helper to bootstrap Garmin OAuth tokens on the host |
 | `src/storage.py` | SQLite store — users, activities, kudos deduplication, sync audit log |
 | `src/format.py` | German formatting: dates, numbers, pace, message builder |
-| `src/map_render.py` | GPX → PNG via `staticmap` (OSM tiles) |
+| `src/map_render.py` | FIT→GPX + GPX → PNG map/elevation profile via `staticmap` (OSM tiles) & Pillow |
+| `src/track_signature.py` | Precomputes a grid-cell GPS-track signature for route-similarity comparison |
+| `src/insights.py` | Precomputes per-kilometre pace/HR/cadence/power splits and trend flags |
 | `src/mastodon_bot.py` | Bot that posts mentions with optional map attachment (public, unlisted, or direct DM) |
 | `src/kudos_machine.py` | Polls activity posts for new favourites and sends kudos replies |
 | `src/caldav_push.py` | Builds VEVENT and pushes to Nextcloud CalDAV |
@@ -771,8 +785,10 @@ Python dependencies (installed inside the container):
 
 ```
 garminconnect  caldav  icalendar  Mastodon.py
-gpxpy  staticmap  Pillow  requests
+gpxpy  fitparse  staticmap  Pillow  requests
 ```
+
+(See `requirements.txt` for the authoritative, version-pinned list.)
 
 ---
 

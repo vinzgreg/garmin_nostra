@@ -1,8 +1,17 @@
 config.toml
 __pycache__/
 *.pyc
+.venv/
 backfill_gpx.py
 analyze_fit_export.py
 garmin_connect_API_uprade.md
 garmin_nostra.png
 garminnostra_banner.png
+
+# Local operator scratch scripts (host-specific, not part of the app)
+check.sh
+manual_token.py
+update_docker.sh
+
+# Working notes
+CODE_REVIEW_2026-07-21.md

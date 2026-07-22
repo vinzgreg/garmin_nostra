@@ -3,12 +3,20 @@
 from __future__ import annotations
 
 import sys
+from collections import namedtuple
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import patch
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from insights import compute_insights_from_gpx  # noqa: E402
+from insights import (  # noqa: E402
+    compute_insights_from_fit,
+    compute_insights_from_gpx,
+    _build_result,
+)
 
 
 def _gpx(n_points: int, step_m: float = 3.0, start_hr: int = 120, hr_ramp: float = 0.05,
@@ -106,3 +114,116 @@ def test_malformed_gpx_returns_none():
 def test_empty_gpx_returns_none():
     empty = '<?xml version="1.0"?><gpx version="1.1"><trk><trkseg></trkseg></trk></gpx>'.encode()
     assert compute_insights_from_gpx(empty) is None
+
+
+# ── FIT path (Wahoo / FIT-only Garmin) ───────────────────────────────────────
+#
+# fitparse only decodes, so there is no way to hand-write a real FIT binary in
+# a test. Mock fitparse.FitFile to return synthetic `record` messages instead:
+# this still exercises insights' own FIT field extraction (the hr/cadence/power
+# names it reads, altitude fallback, tz-normalisation), which is the entire
+# reason compute_insights_from_fit exists apart from the GPX path.
+
+_Field = namedtuple("_Field", ["name", "value"])
+
+
+def _fit_records(n_points: int, step_m: float = 3.0, start_hr: int = 120,
+                 hr_ramp: float = 0.1, cadence: int = 85, power: int | None = None):
+    """Build fake FIT `record` messages, one per second heading a fixed step.
+
+    Each 'record' is just an iterable of _Field(name, value) — matching how
+    insights._extract_fit_points consumes them ({f.name: f.value for f in rec}).
+    """
+    base = datetime(2026, 1, 1, 10, 0, 0, tzinfo=timezone.utc)
+    records = []
+    for i in range(n_points):
+        fields = [
+            _Field("distance", i * step_m),
+            _Field("timestamp", base + timedelta(seconds=i)),
+            _Field("altitude", 500.0),
+            _Field("heart_rate", int(start_hr + i * hr_ramp)),
+            _Field("cadence", cadence),
+        ]
+        if power is not None:
+            fields.append(_Field("power", power))
+        records.append(fields)
+    return records
+
+
+class _FakeFit:
+    def __init__(self, records):
+        self._records = records
+
+    def get_messages(self, name):
+        assert name == "record"
+        return list(self._records)
+
+
+@patch("insights.fitparse.FitFile")
+def test_compute_insights_from_fit_full(MockFitFile):
+    MockFitFile.return_value = _FakeFit(_fit_records(700, power=180))
+    result = compute_insights_from_fit(b"ignored-bytes")
+    assert result is not None
+    assert result["source_format"] == "fit"
+    assert result["has_hr"] is True
+    assert result["has_cadence"] is True
+    assert result["has_power"] is True
+    split = result["splits_json"]["splits"][0]
+    assert split["avg_cadence"] == 85
+    assert split["avg_power_w"] == pytest.approx(180.0)
+    assert split["pace_s_per_km"] is not None
+
+
+@patch("insights.fitparse.FitFile")
+def test_compute_insights_from_fit_without_power(MockFitFile):
+    MockFitFile.return_value = _FakeFit(_fit_records(700, power=None))
+    result = compute_insights_from_fit(b"ignored-bytes")
+    assert result is not None
+    assert result["has_power"] is False
+    assert result["has_hr"] is True
+    for split in result["splits_json"]["splits"]:
+        assert split["avg_power_w"] is None
+
+
+@patch("insights.fitparse.FitFile")
+def test_compute_insights_from_fit_short_track_returns_none(MockFitFile):
+    # 200 points * 3m = 600m, under one full km.
+    MockFitFile.return_value = _FakeFit(_fit_records(200))
+    assert compute_insights_from_fit(b"ignored-bytes") is None
+
+
+@patch("insights.fitparse.FitFile", side_effect=Exception("corrupt FIT"))
+def test_compute_insights_from_fit_parse_error_returns_none(MockFitFile):
+    assert compute_insights_from_fit(b"garbage") is None
+
+
+# ── Non-positive split durations (clock skew / paused device) ────────────────
+
+def _flat_points(n: int, time_fn, step_m: float = 3.0) -> list[dict]:
+    return [
+        {"distance_m": i * step_m, "time": time_fn(i),
+         "elevation": 500.0, "hr": None, "cadence": None, "power": None}
+        for i in range(n)
+    ]
+
+
+def test_zero_duration_split_yields_none_pace():
+    """Identical timestamps across a split -> duration/pace reported as None,
+    not 0.0 (the old `if duration_s` truthiness check dropped a legit 0.0)."""
+    base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    points = _flat_points(400, lambda i: base)  # every point same time
+    result = _build_result(points)
+    assert result is not None
+    for split in result["splits_json"]["splits"]:
+        assert split["duration_s"] is None
+        assert split["pace_s_per_km"] is None
+
+
+def test_negative_duration_split_yields_none_pace():
+    """Decreasing timestamps (clock skew) must not produce a negative pace."""
+    base = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+    points = _flat_points(400, lambda i: base - timedelta(seconds=i))
+    result = _build_result(points)
+    assert result is not None
+    for split in result["splits_json"]["splits"]:
+        assert split["pace_s_per_km"] is None

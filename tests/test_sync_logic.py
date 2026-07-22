@@ -207,9 +207,13 @@ def test_garmin_caldav_pushed_when_enabled(MockGarmin, mock_render, store, user_
 
 @patch("sync.render_map", return_value=None)
 @patch("sync.GarminClient")
-def test_garmin_dedup_with_wahoo_skips_matching_activity(MockGarmin, mock_render, store, user_cfg, garmin_cycling):
-    """When dedup_with_wahoo=True and a Wahoo activity with the same start time already
-    exists, the Garmin activity is skipped (not stored)."""
+def test_garmin_dedup_with_wahoo_suppresses_matching_activity(MockGarmin, mock_render, store, user_cfg, garmin_cycling):
+    """When a Wahoo activity overlapping the same time window already exists, the
+    Garmin activity is persisted as `suppressed` (an audit trail) and not posted.
+
+    Cross-source dedup is handled uniformly by ActivityStore.save_activity's
+    interval-overlap suppression — there is no separate start-time pre-check that
+    drops the row without a trace."""
     from wahoo import map_wahoo_activity
     from conftest import load_fixture
 
@@ -232,10 +236,12 @@ def test_garmin_dedup_with_wahoo_skips_matching_activity(MockGarmin, mock_render
     MockGarmin.return_value = _make_garmin_client([act])
     bot = _make_bot()
 
-    process_user(user_cfg, store, bot, None, lookback_days=7, dedup_with_wahoo=True)
+    process_user(user_cfg, store, bot, None, lookback_days=7)
 
-    # Garmin activity must not be stored
-    assert store.get_activity(uid, str(garmin_cycling["activityId"])) is None
+    # Garmin activity is stored but suppressed, and not posted to Mastodon
+    fetched = store.get_activity(uid, str(garmin_cycling["activityId"]))
+    assert fetched is not None
+    assert fetched["suppressed"] == "wahoo_garmin_duplicate"
     bot.post_activity.assert_not_called()
 
 
@@ -329,6 +335,43 @@ def test_wahoo_already_posted_is_not_posted_again(MockWahoo, store, wahoo_workou
 
     process_user_wahoo(cfg, store, bot, None, lookback_days=7)
     assert bot.post_activity.call_count == 1  # not called again
+
+
+@patch("sync.render_map", return_value=None)
+@patch("sync.WahooClient")
+def test_wahoo_retry_reattaches_map_image(MockWahoo, mock_render, store,
+                                          wahoo_workout_cycling, wahoo_summary_cycling):
+    """If the first Mastodon post fails, the retry on the next cycle must
+    re-attach the map rendered on the first run (from disk) rather than posting
+    text-only — the known-activity branch reconstructs map_path/elevation_path."""
+    workout = dict(wahoo_workout_cycling)
+    workout["starts"] = (
+        datetime.now(timezone.utc) - timedelta(hours=2)
+    ).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+    MockWahoo.return_value = _make_wahoo_client([workout], summary=wahoo_summary_cycling)
+    bot = MagicMock()
+    # First post fails, second (retry) succeeds
+    bot.post_activity.side_effect = [Exception("mastodon down"), "STATUS_RETRY"]
+    cfg = _base_user_cfg({
+        "wahoo_client_id": "cid", "wahoo_client_secret": "cs", "wahoo_refresh_token": "rt",
+    })
+
+    # First cycle: workout saved, post attempted and fails -> mastodon_posted stays 0
+    process_user_wahoo(cfg, store, bot, None, lookback_days=7)
+    uid = store.upsert_user(cfg)
+    assert store.get_wahoo_activity(uid, str(workout["id"]))["mastodon_posted"] == 0
+
+    # Simulate the map that the first run would have rendered onto disk
+    map_file = store.map_path(cfg["name"], str(workout["id"]))
+    map_file.parent.mkdir(parents=True, exist_ok=True)
+    map_file.write_bytes(b"PNGDATA")
+
+    # Second cycle: retry re-posts, and must pass the on-disk map (arg index 2)
+    process_user_wahoo(cfg, store, bot, None, lookback_days=7)
+    assert bot.post_activity.call_count == 2
+    retry_args = bot.post_activity.call_args
+    assert retry_args[0][2] == map_file  # map_image_path, not None
 
 
 @patch("sync.WahooClient")
@@ -516,10 +559,10 @@ def test_both_mode_garmin_duplicate_suppressed(MockWahoo, MockGarmin, mock_rende
     })
 
     # Run Wahoo side (as sync._run_inner would for source='both')
-    process_user_wahoo(cfg, store, bot, None, lookback_days=7)
-    # Run Garmin side with dedup enabled
+    process_user_wahoo(cfg, store, bot, None, lookback_days=7, tag_source=True)
+    # Run Garmin side — cross-source suppression happens in save_activity
     process_user(cfg, store, bot, None, lookback_days=7,
-                 dedup_with_wahoo=True, tag_source=True, skip_kudos=True)
+                 tag_source=True, skip_kudos=True)
 
     uid = store.upsert_user(cfg)
     garmin_fetched = store.get_activity(uid, str(garmin_cycling["activityId"]))

@@ -41,17 +41,24 @@ logger = logging.getLogger("backfill_insights")
 
 
 def _pending_rows(store: ActivityStore) -> list[dict]:
-    """Activities with no insights yet and at least one usable track file."""
+    """Activities needing insights: no row yet, or one at an older schema.
+
+    Includes rows whose stored schema_version is behind the current
+    SCHEMA_VERSION so that bumping it actually forces reprocessing (save_insights
+    does INSERT OR REPLACE). Without this, the constant would be inert — the
+    documented "bump to reprocess" upgrade path would silently no-op.
+    """
     rows = store._conn.execute(
         """
         SELECT a.id, a.garmin_activity_id, a.source, a.gpx_path, a.fit_path
         FROM activities a
         LEFT JOIN activity_insights i ON i.activity_id = a.id
-        WHERE i.activity_id IS NULL
+        WHERE (i.activity_id IS NULL OR i.schema_version < ?)
           AND a.suppressed IS NULL
           AND (a.gpx_path IS NOT NULL OR a.fit_path IS NOT NULL)
         ORDER BY a.id
-        """
+        """,
+        (SCHEMA_VERSION,),
     ).fetchall()
     return [dict(r) for r in rows]
 

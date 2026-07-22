@@ -170,6 +170,12 @@ class GarminClient:
                 start += page_size
             return result
 
+        # NOTE: shutdown(wait=False) does not cancel a running worker — if the
+        # network call is genuinely wedged, its (non-daemon) thread outlives
+        # this call. The hard-exit guard in sync.py's __main__ ensures such a
+        # leaked thread can't hang the one-shot process at interpreter exit.
+        # (Same pattern at every ThreadPoolExecutor site in this module and in
+        # wahoo.py.)
         ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         future = ex.submit(_paginate)
         try:

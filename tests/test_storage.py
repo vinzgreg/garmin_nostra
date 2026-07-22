@@ -551,3 +551,99 @@ def test_get_last_sync_time_returns_most_recent(store, user_id, garmin_running, 
     store.save_activity(user_id, garmin_cycling)   # 2023-06-25 — older
     t = store.get_last_sync_time(user_id)
     assert t.year == 2026
+
+
+def test_get_last_sync_time_scoped_by_source(store, user_id, garmin_running):
+    """Under source='both' Garmin and Wahoo share a user_id. The source filter
+    must scope the window so a fresh Garmin activity does not drag the Wahoo
+    window forward (which would drop Wahoo workouts) and vice versa."""
+    store.save_activity(user_id, garmin_running)  # GarminNoStra, 2026-03-04
+    wahoo_row = _make_wahoo_row(user_id, "W100", "2023-06-25 08:00:00", 3600.0)
+    store.save_wahoo_activity(user_id, wahoo_row)  # WahooNoStra, 2023-06-25
+
+    # Unscoped: newest overall (Garmin, 2026)
+    assert store.get_last_sync_time(user_id).year == 2026
+    # Scoped to Garmin: 2026
+    assert store.get_last_sync_time(user_id, source="GarminNoStra").year == 2026
+    # Scoped to Wahoo: the older 2023 activity, NOT dragged to 2026
+    assert store.get_last_sync_time(user_id, source="WahooNoStra").year == 2023
+
+
+# ── Kudos cutoff format (boundary day) ────────────────────────────────────────
+
+def test_kudos_cutoff_includes_boundary_day(store, user_id):
+    """The age cutoff must be built in the stored space-separated format so a
+    SQLite lexicographic compare doesn't wrongly exclude the boundary day (an
+    isoformat 'T'/'+00:00' cutoff would: ' ' < 'T')."""
+    max_age = 7
+    cutoff_dt = datetime.now(timezone.utc) - timedelta(days=max_age)
+    # 1s after the cutoff instant, formatted the way start_time_utc is stored.
+    start_str = (cutoff_dt + timedelta(seconds=1)).strftime("%Y-%m-%d %H:%M:%S")
+
+    act = {
+        "activityId": "K1", "activityName": "Run",
+        "startTimeGMT": start_str, "startTimeLocal": start_str,
+        "activityType": {"typeKey": "running"},
+        "duration": 1800.0, "distance": 5000.0,
+    }
+    store.save_activity(user_id, act)
+    store.mark_mastodon_posted(user_id, "K1", status_id="S1")
+
+    rows = store.get_activities_for_kudos(user_id, max_age_days=max_age)
+    assert any(r["garmin_activity_id"] == "K1" for r in rows)
+
+
+# ── Migration resilience (malformed raw_json) ────────────────────────────────
+
+def test_migrate_tolerates_malformed_raw_json(tmp_path):
+    """A row with non-JSON raw_json must not crash ActivityStore construction:
+    the json_extract backfills are guarded by json_valid(), so a bad row is
+    skipped while valid rows are still backfilled."""
+    db_path = str(tmp_path / "malformed.db")
+    kwargs = dict(
+        gpx_dir=str(tmp_path / "gpx"), fit_dir=str(tmp_path / "fit"),
+        map_dir=str(tmp_path / "maps"), token_dir=str(tmp_path / "tokens"),
+    )
+    s = ActivityStore(db_path=db_path, **kwargs)
+    uid = s.upsert_user({"name": "u", "garmin_username": "x@example.invalid"})
+    now = datetime.now(timezone.utc).isoformat()
+    # Bad row: unparseable raw_json, avg_power_w NULL
+    s._conn.execute(
+        "INSERT INTO activities (user_id, garmin_activity_id, source, raw_json, synced_at, avg_power_w)"
+        " VALUES (?, ?, 'GarminNoStra', ?, ?, NULL)",
+        (uid, "BAD", "not json {", now),
+    )
+    # Good row: valid JSON carrying avgPower, avg_power_w NULL -> should backfill
+    s._conn.execute(
+        "INSERT INTO activities (user_id, garmin_activity_id, source, raw_json, synced_at, avg_power_w)"
+        " VALUES (?, ?, 'GarminNoStra', ?, ?, NULL)",
+        (uid, "GOOD", json.dumps({"avgPower": 210.0}), now),
+    )
+    # Re-arm the one-time data backfills (they run only when user_version < 1).
+    s._conn.execute("PRAGMA user_version = 0")
+    s._conn.commit()
+    s.close()
+
+    # Re-open: _migrate re-runs the backfills and must not raise on the bad row.
+    s2 = ActivityStore(db_path=db_path, **kwargs)
+    assert s2.get_activity(uid, "GOOD")["avg_power_w"] == pytest.approx(210.0)
+    assert s2.get_activity(uid, "BAD")["avg_power_w"] is None
+    s2.close()
+
+
+# ── Wahoo save-time source tag ────────────────────────────────────────────────
+
+def test_save_wahoo_activity_applies_name_prefix(store, user_id, wahoo_workout_cycling, wahoo_summary_cycling):
+    from wahoo import map_wahoo_activity
+    row = map_wahoo_activity(user_id, wahoo_workout_cycling, wahoo_summary_cycling)
+    store.save_wahoo_activity(user_id, row, name_prefix="[Wahoo] ")
+    fetched = store.get_wahoo_activity(user_id, str(wahoo_workout_cycling["id"]))
+    assert fetched["activity_name"].startswith("[Wahoo] ")
+
+
+def test_save_wahoo_activity_no_prefix_by_default(store, user_id, wahoo_workout_cycling, wahoo_summary_cycling):
+    from wahoo import map_wahoo_activity
+    row = map_wahoo_activity(user_id, wahoo_workout_cycling, wahoo_summary_cycling)
+    store.save_wahoo_activity(user_id, row)
+    fetched = store.get_wahoo_activity(user_id, str(wahoo_workout_cycling["id"]))
+    assert not fetched["activity_name"].startswith("[Wahoo]")

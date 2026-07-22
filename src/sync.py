@@ -163,7 +163,6 @@ def process_user(
     mastodon_post_delay_s: float = 2.0,
     kudos_machine: KudosMachine | None = None,
     tag_source: bool = False,
-    dedup_with_wahoo: bool = False,
     skip_kudos: bool = False,
 ) -> None:
     name   = user_cfg["name"]
@@ -172,8 +171,10 @@ def process_user(
 
     user_id = store.upsert_user(user_cfg)
 
-    # Determine sync window
-    since    = store.get_last_sync_time(user_id)
+    # Determine sync window. Scope to Garmin-sourced activities so that, under
+    # source='both' (shared user_id with Wahoo), a fresh Wahoo activity does
+    # not drag the Garmin window forward and hide un-synced Garmin activities.
+    since    = store.get_last_sync_time(user_id, source="GarminNoStra")
     earliest = datetime.now(timezone.utc) - timedelta(days=lookback_days)
     since    = max(since, earliest)
     # Always look back at least 2 hours so that recently-saved activities
@@ -230,24 +231,14 @@ def process_user(
                     continue
 
             if existing is None:
-                # ── Cross-source dedup: skip if a Wahoo activity with the
-                #    same start time is already in the DB (e.g. Wahoo
-                #    auto-synced this workout to Garmin and we already
-                #    processed it from the Wahoo side). ───────────────────────
-                if dedup_with_wahoo and act_time is not None:
-                    start_str_db = act_time.strftime("%Y-%m-%d %H:%M:%S")
-                    dupe = store.get_activity_near_time(
-                        user_id, start_str_db, window_s=120, source="WahooNoStra"
-                    )
-                    if dupe:
-                        logger.info(
-                            "[%s] Skipping Garmin activity %s — already imported as "
-                            "Wahoo activity %s.",
-                            name, garmin_id, dupe["garmin_activity_id"],
-                        )
-                        continue
-
                 # ── New activity — download, store, then integrate ──────────
+                # Cross-source dedup (Wahoo already covers this time window) is
+                # handled uniformly by ActivityStore.save_activity(), which
+                # marks the row `suppressed` using the same interval-overlap
+                # rule as the retroactive Wahoo→Garmin suppression. The row is
+                # persisted (audit trail) and skipped for integrations below,
+                # and recognised as `existing` on the next cycle — so no
+                # separate, weaker start-time pre-check is needed here.
                 gpx_data = None
                 gpx_path = None
                 fit_data = None
@@ -451,18 +442,33 @@ def process_user_wahoo(
     mastodon_max_age_days: int | None = None,
     mastodon_post_delay_s: float = 2.0,
     kudos_machine: KudosMachine | None = None,
+    tag_source: bool = False,
 ) -> None:
-    """Sync activities from Wahoo Cloud API for a single user."""
+    """Sync activities from Wahoo Cloud API for a single user.
+
+    *tag_source* prepends a "[Wahoo] " tag to activity names — enabled under
+    source='both' so posts show which source a workout came from, disabled for
+    Wahoo-only users (parallel to the Garmin "[Garmin] " tag).
+    """
     name   = user_cfg["name"]
     handle = user_cfg.get("mastodon_handle")
     caldav_enabled = user_cfg.get("caldav_enabled", False)
 
     user_id = store.upsert_user(user_cfg)
 
-    # Determine sync window
-    since    = store.get_last_sync_time(user_id)
+    # Determine sync window. Scope to Wahoo-sourced activities so that, under
+    # source='both' (shared user_id with Garmin), a fresh Garmin activity does
+    # not drag the Wahoo window forward — get_workouts_since() hard-filters on
+    # start >= since, so a dragged window would *drop* Wahoo workouts outright,
+    # not merely defer them.
+    since    = store.get_last_sync_time(user_id, source="WahooNoStra")
     earliest = datetime.now(timezone.utc) - timedelta(days=lookback_days)
     since    = max(since, earliest)
+    # Mirror the Garmin path's 2-hour re-look floor so recently-saved workouts
+    # are re-fetched (pending retries, late-arriving FIT data) rather than
+    # falling just outside the window on the next cycle.
+    metrics_cutoff = datetime.now(timezone.utc) - timedelta(hours=2)
+    since = min(since, metrics_cutoff)
     logger.info("[%s] (Wahoo) Syncing workouts since %s.", name, since.isoformat())
 
     wahoo = WahooClient(
@@ -586,7 +592,10 @@ def process_user_wahoo(
                                 logger.error("[%s] Elevation profile rendering failed for %s: %s", name, wahoo_id, exc)
                                 elevation_path = None
 
-                activity_row = store.save_wahoo_activity(user_id, activity_row, fit_path=fit_path)
+                activity_row = store.save_wahoo_activity(
+                    user_id, activity_row, fit_path=fit_path,
+                    name_prefix="[Wahoo] " if tag_source else None,
+                )
                 logger.info("[%s] New Wahoo workout saved: %s", name, wahoo_id)
 
                 if gpx_data:
@@ -644,8 +653,13 @@ def process_user_wahoo(
                 # ── Known activity — check if any integration needs retry ─
                 activity_row = existing
                 logger.debug("[%s] Wahoo workout %s already known.", name, wahoo_id)
-                map_path = None
-                elevation_path = None
+                # Point at the images rendered on the first sync so a retried
+                # Mastodon post re-attaches them instead of going text-only.
+                # post_activity() guards each with .exists(), so a missing file
+                # (indoor workout, older row) is simply skipped. Mirrors the
+                # Garmin known-activity branch.
+                map_path = store.map_path(name, wahoo_id)
+                elevation_path = store.elevation_profile_path(name, wahoo_id)
                 # Retry wahoo→garmin if still pending (independent of mastodon/caldav)
                 if (
                     garmin_for_upload
@@ -862,17 +876,18 @@ def _run_inner(config_path: str) -> None:
                         )
                         continue
                     # Wahoo runs first so its activities are in the DB before
-                    # Garmin dedup checks run. Activities are tagged [Wahoo] /
+                    # the Garmin sync runs. Activities are tagged [Wahoo] /
                     # [Garmin] to make the source visible in Mastodon posts.
-                    # Garmin skips any activity whose start time matches a
-                    # Wahoo entry already in the DB (cross-source dedup).
-                    # Each side is isolated — a Wahoo failure must not prevent
-                    # the Garmin sync from running.
+                    # A Garmin activity that overlaps an existing Wahoo entry is
+                    # suppressed by ActivityStore.save_activity (cross-source
+                    # dedup). Each side is isolated — a Wahoo failure must not
+                    # prevent the Garmin sync from running.
                     try:
                         process_user_wahoo(
                             user_cfg, store, bot, caldav_pusher, lookback_days,
                             request_timeout, fit_max_age_days, mastodon_max_age_days,
                             mastodon_post_delay_s, kudos_machine,
+                            tag_source=True,
                         )
                     except Exception as exc:
                         logger.error("[%s] Wahoo sync failed, continuing with Garmin: %s",
@@ -881,7 +896,7 @@ def _run_inner(config_path: str) -> None:
                         user_cfg, store, bot, caldav_pusher, lookback_days,
                         request_timeout, gpx_max_age_days, fit_max_age_days,
                         mastodon_max_age_days, mastodon_post_delay_s, kudos_machine,
-                        tag_source=True, dedup_with_wahoo=True, skip_kudos=True,
+                        tag_source=True, skip_kudos=True,
                     )
                 elif source == "garmin":
                     process_user(
@@ -904,4 +919,24 @@ def _run_inner(config_path: str) -> None:
 
 if __name__ == "__main__":
     config_path = sys.argv[1] if len(sys.argv) > 1 else "/app/config.toml"
-    run(config_path)
+    exit_code = 0
+    try:
+        run(config_path)
+    except SystemExit as exc:  # e.g. _acquire_lock() when another sync holds the lock
+        exit_code = exc.code if isinstance(exc.code, int) else 0
+    except Exception:
+        logger.error("Fatal error during sync run.", exc_info=True)
+        exit_code = 1
+    finally:
+        # Each sync cycle is a one-shot process spawned by entrypoint.sh's
+        # sleep loop, which waits for it to exit before scheduling the next one.
+        # A network worker thread stuck in a C-level socket read can outlive its
+        # future's timeout — ThreadPoolExecutor cannot cancel a running thread,
+        # and shutdown(wait=False) does not kill it. Those workers are
+        # non-daemon, so normal interpreter shutdown would join them and hang
+        # this process indefinitely, wedging the whole loop. run() has already
+        # released the DB and lock, so force-exit past any lingering worker
+        # threads rather than waiting on them.
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(exit_code)

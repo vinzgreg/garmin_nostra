@@ -166,6 +166,11 @@ def _build_result(points: list[dict]) -> dict | None:
             (end["time"] - start["time"]).total_seconds()
             if start["time"] and end["time"] else None
         )
+        # A non-positive split time (identical timestamps, or clock skew across
+        # a device pause) is not usable — treat it as missing rather than
+        # emitting a zero/negative pace. `if duration_s` alone would wrongly
+        # drop a legitimate 0.0 and let a negative through.
+        valid_duration = duration_s is not None and duration_s > 0
         distance_this_split = end["distance_m"] - start["distance_m"]
         hrs = [p["hr"] for p in chunk if p["hr"] is not None]
         cads = [p["cadence"] for p in chunk if p["cadence"] is not None]
@@ -178,10 +183,10 @@ def _build_result(points: list[dict]) -> dict | None:
         splits.append({
             "index": len(splits) + 1,
             "distance_m": round(distance_this_split, 1),
-            "duration_s": round(duration_s, 1) if duration_s else None,
+            "duration_s": round(duration_s, 1) if valid_duration else None,
             "pace_s_per_km": (
                 round(duration_s * 1000.0 / distance_this_split, 1)
-                if duration_s and distance_this_split > 0 else None
+                if valid_duration and distance_this_split > 0 else None
             ),
             "avg_hr": round(sum(hrs) / len(hrs)) if hrs else None,
             "avg_cadence": round(sum(cads) / len(cads)) if cads else None,
