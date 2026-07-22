@@ -2,6 +2,24 @@ config.toml
 __pycache__/
 *.pyc
 .venv/
+
+# Secrets & credentials — never commit (defensive: bootstrap_auth.py defaults
+# its token output to the current dir, docker compose auto-loads .env)
+.env
+.env.*
+garmin_tokens.json
+wahoo_tokens.json
+*_tokens.json
+tokens/
+
+# Runtime data artifacts (normally live under ~/data, but guard against
+# anything run from the repo root writing them here)
+*.db
+*.db-wal
+*.db-shm
+*.gpx
+*.fit
+*.fit.gz
 backfill_gpx.py
 analyze_fit_export.py
 garmin_connect_API_uprade.md
