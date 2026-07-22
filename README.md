@@ -97,11 +97,17 @@ python3 -m venv /tmp/garmin-bootstrap
 source /tmp/garmin-bootstrap/bin/activate
 pip install requests
 
-# Run once per Garmin user — replace 'betty' with the user's name from config.toml:
-python3 src/bootstrap_auth.py -o ~/data/garmin-tokens/betty
+# Run once per Garmin user — replace 'betty' with the user's name from config.toml.
+# Tokens are written to <token-base>/betty automatically, where <token-base> is
+# the host path backing the container's /tokens mount (read from docker-compose.yml,
+# i.e. ~/data/garmin-tokens):
+python3 src/bootstrap_auth.py betty
 
 # Optionally specify a browser (default: system default):
-python3 src/bootstrap_auth.py -o ~/data/garmin-tokens/betty --browser firefox
+python3 src/bootstrap_auth.py betty --browser firefox
+
+# Or override the location explicitly:
+python3 src/bootstrap_auth.py -o ~/data/garmin-tokens/betty
 ```
 
 The script opens a browser to the Garmin SSO login page.

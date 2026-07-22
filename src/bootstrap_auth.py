@@ -10,8 +10,13 @@ Requirements: pip install requests
 
 Usage:
 
-    python3 src/bootstrap_auth.py -o ~/data/garminnostra/tokens/betty
-    python3 src/bootstrap_auth.py -o . --browser firefox
+    # Tokens land in <token-base>/<name>, where <token-base> is the host path
+    # backing the container's /tokens mount (read from docker-compose.yml):
+    python3 src/bootstrap_auth.py betty
+    python3 src/bootstrap_auth.py betty --browser firefox
+
+    # Or point at an explicit directory:
+    python3 src/bootstrap_auth.py -o /some/other/dir
 """
 
 from __future__ import annotations
@@ -132,6 +137,39 @@ def _parse_ticket(raw: str) -> str | None:
 
 
 # ---------------------------------------------------------------------------
+# Default token location
+# ---------------------------------------------------------------------------
+
+_TOKEN_BASE_FALLBACK = "~/data/garmin-tokens"
+
+
+def _default_token_base() -> Path:
+    """Host directory that backs the container's token mount.
+
+    Parsed from docker-compose.yml's ``<host>:/tokens`` volume so the default
+    tracks the real deployment path rather than a hardcoded guess. Falls back
+    to ~/data/garmin-tokens if the compose file can't be read (e.g. the script
+    is run from outside the repo).
+    """
+    fallback = Path(_TOKEN_BASE_FALLBACK).expanduser()
+    compose = Path(__file__).resolve().parent.parent / "docker-compose.yml"
+    try:
+        for line in compose.read_text().splitlines():
+            s = line.strip()
+            if not s.startswith("- ") or ":" not in s:
+                continue  # not a volume-mapping list item
+            spec = s[2:].strip().strip('"').strip("'")
+            # Split host:container on the LAST colon — a container path like
+            # ":ro"-suffixed binds have extra colons; the token mount does not.
+            host, _, container = spec.rpartition(":")
+            if host and Path(container.strip()).name == "tokens":
+                return Path(host.strip()).expanduser()
+    except OSError:
+        pass
+    return fallback
+
+
+# ---------------------------------------------------------------------------
 # Save tokens
 # ---------------------------------------------------------------------------
 
@@ -218,13 +256,20 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Examples:\n"
-            "  python3 src/bootstrap_auth.py -o ~/data/garminnostra/tokens/betty\n"
-            "  python3 src/bootstrap_auth.py -o . --browser firefox\n"
+            "  python3 src/bootstrap_auth.py betty\n"
+            "  python3 src/bootstrap_auth.py betty --browser firefox\n"
+            "  python3 src/bootstrap_auth.py -o /some/other/dir\n"
         ),
     )
     parser.add_argument(
+        "name", nargs="?",
+        help="Garmin user name from config.toml (e.g. betty). Tokens are written "
+             "to <token-base>/<name>, where <token-base> is the host path backing "
+             "the container's /tokens mount.",
+    )
+    parser.add_argument(
         "-o", "--output", metavar="DIR",
-        help="Output directory for garmin_tokens.json. Default: current directory.",
+        help="Explicit output directory, overriding the <token-base>/<name> default.",
     )
     parser.add_argument(
         "--browser", metavar="NAME",
@@ -232,8 +277,18 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    output_dir = Path(args.output).expanduser() if args.output else Path(".").resolve()
-    label = output_dir.name or "Garmin user"
+    if args.output:
+        output_dir = Path(args.output).expanduser()
+    elif args.name:
+        output_dir = _default_token_base() / args.name
+    else:
+        # No cwd default: refuse to write OAuth tokens to an unspecified
+        # location (that risked dropping garmin_tokens.json into the repo).
+        parser.error("provide a user NAME (or -o DIR) — refusing to write tokens "
+                     "to an unspecified location.")
+
+    label = args.name or output_dir.name or "Garmin user"
+    print(f"Token output directory: {output_dir}")
     _bootstrap_user(label, output_dir, browser_name=args.browser)
 
 
