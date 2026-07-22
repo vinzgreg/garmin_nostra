@@ -27,6 +27,7 @@ from mastodon_bot import MastodonBot
 from kudos_machine import KudosMachine
 from map_render import fit_to_gpx, render_map, render_elevation_profile
 from track_signature import compute_track_cells, DEFAULT_CELL_SIZE_M
+from insights import compute_insights_from_gpx, compute_insights_from_fit, SCHEMA_VERSION as INSIGHTS_SCHEMA_VERSION
 from format import _is_speed_type
 
 LOG_FORMAT = "%(asctime)s %(levelname)-8s %(name)s: %(message)s"
@@ -249,6 +250,7 @@ def process_user(
                 # ── New activity — download, store, then integrate ──────────
                 gpx_data = None
                 gpx_path = None
+                fit_data = None
                 fit_path = None
 
                 skip_gpx = (
@@ -311,6 +313,27 @@ def process_user(
                             "[%s] Track signature computation failed for %s: %s",
                             name, garmin_id, exc,
                         )
+
+                try:
+                    insights_result = None
+                    if gpx_data:
+                        insights_result = compute_insights_from_gpx(gpx_data)
+                    elif fit_data:
+                        insights_result = compute_insights_from_fit(fit_data)
+                    if insights_result:
+                        saved_row = store.get_activity(user_id, garmin_id)
+                        store.save_insights(
+                            saved_row["id"], INSIGHTS_SCHEMA_VERSION,
+                            insights_result["source_format"], insights_result["splits_json"],
+                            insights_result["hr_drift_pct"], insights_result["negative_split"],
+                            insights_result["has_hr"], insights_result["has_cadence"],
+                            insights_result["has_power"],
+                        )
+                except Exception as exc:
+                    logger.error(
+                        "[%s] Insights computation failed for %s: %s",
+                        name, garmin_id, exc,
+                    )
 
                 elevation_path = None
                 if gpx_data and _is_speed_type(activity_row.get("activity_type") or ""):
@@ -578,6 +601,27 @@ def process_user_wahoo(
                     except Exception as exc:
                         logger.error(
                             "[%s] Track signature computation failed for %s: %s",
+                            name, wahoo_id, exc,
+                        )
+
+                # Insights need heart-rate/cadence/power, which fit_to_gpx()
+                # (used for gpx_data above) does not carry through -- parse
+                # the raw FIT bytes directly instead.
+                if fit_data:
+                    try:
+                        insights_result = compute_insights_from_fit(fit_data)
+                        if insights_result:
+                            saved_row = store.get_wahoo_activity(user_id, wahoo_id)
+                            store.save_insights(
+                                saved_row["id"], INSIGHTS_SCHEMA_VERSION,
+                                insights_result["source_format"], insights_result["splits_json"],
+                                insights_result["hr_drift_pct"], insights_result["negative_split"],
+                                insights_result["has_hr"], insights_result["has_cadence"],
+                                insights_result["has_power"],
+                            )
+                    except Exception as exc:
+                        logger.error(
+                            "[%s] Insights computation failed for %s: %s",
                             name, wahoo_id, exc,
                         )
 

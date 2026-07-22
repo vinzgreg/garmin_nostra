@@ -19,7 +19,7 @@ def test_store_creates_tables(store):
     ).fetchall()}
     assert {
         "users", "activities", "sync_runs", "kudos_sent", "wahoo_skipped",
-        "activity_track_signatures",
+        "activity_track_signatures", "activity_insights",
     } <= tables
 
 
@@ -69,6 +69,51 @@ def test_save_track_signature_replaces_on_recompute(store, user_id, garmin_runni
     assert row["cells"] == "9:9,8:8"
     assert row["point_count"] == 2
     assert row["source_format"] == "fit"
+
+
+# ── Insights ───────────────────────────────────────────────────────────────
+
+def test_save_and_check_insights(store, user_id, garmin_running):
+    store.save_activity(user_id, garmin_running)
+    fetched = store.get_activity(user_id, str(garmin_running["activityId"]))
+
+    assert store.has_insights(fetched["id"]) is False
+    store.save_insights(
+        fetched["id"], 1, "gpx",
+        {"unit": "km", "splits": [], "partial_last_split_m": 0.0},
+        None, None, False, False, False,
+    )
+    assert store.has_insights(fetched["id"]) is True
+
+
+def test_save_insights_replaces_on_recompute(store, user_id, garmin_running):
+    store.save_activity(user_id, garmin_running)
+    fetched = store.get_activity(user_id, str(garmin_running["activityId"]))
+
+    store.save_insights(
+        fetched["id"], 1, "gpx",
+        {"unit": "km", "splits": [{"index": 1}], "partial_last_split_m": 0.0},
+        None, None, False, False, False,
+    )
+    store.save_insights(
+        fetched["id"], 2, "fit",
+        {"unit": "km", "splits": [{"index": 1}, {"index": 2}], "partial_last_split_m": 340.0},
+        6.3, True, True, True, False,
+    )
+
+    row = store._conn.execute(
+        "SELECT schema_version, source_format, splits_json, hr_drift_pct, negative_split, "
+        "has_hr, has_cadence, has_power FROM activity_insights WHERE activity_id = ?",
+        (fetched["id"],),
+    ).fetchone()
+    assert row["schema_version"] == 2
+    assert row["source_format"] == "fit"
+    assert json.loads(row["splits_json"])["partial_last_split_m"] == 340.0
+    assert row["hr_drift_pct"] == 6.3
+    assert row["negative_split"] == 1
+    assert row["has_hr"] == 1
+    assert row["has_cadence"] == 1
+    assert row["has_power"] == 0
 
 
 def test_wal_mode_enabled(store):

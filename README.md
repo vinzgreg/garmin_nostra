@@ -583,7 +583,60 @@ container path (`/data/gpx/...`) every other row uses — a pre-existing data
 inconsistency, not something this feature introduced or corrects. The
 backfill script tolerates it: if the stored path isn't readable, it falls
 back to reconstructing `<gpx_dir>/<user-dir>/<filename>` from the path's
-last two components before giving up.
+last two components before giving up. (`scripts/_backfill_common.py` holds
+this path-resolution/gzip-decompression logic shared with
+`backfill_insights.py` below.)
+
+### `activity_insights`
+Precomputed per-kilometre pace/heart-rate/cadence splits (e.g. for
+nostra-mcp's `get_activity_insights` tool). One row per activity with at
+least one full km — computed automatically at sync time, no configuration
+needed. Whole-activity aggregates (`avg_hr`, `avg_cadence`, `avg_power_w`,
+etc.) already exist as columns on `activities`; this table holds only the
+per-split breakdown and two derived cross-split flags, not a copy of what's
+already there.
+
+| Column | Type | Description |
+|---|---|---|
+| `activity_id` | INTEGER PK | FK to `activities.id` |
+| `schema_version` | INTEGER | Bumped when the computation logic changes shape, to force reprocessing |
+| `source_format` | TEXT | `gpx` (Garmin's native file, HR/cadence via its `TrackPointExtension`) or `fit` (parsed directly from FIT `record` messages) |
+| `splits_json` | TEXT | `{unit: "km", splits: [...], partial_last_split_m}` — see below |
+| `hr_drift_pct` | REAL | Second-half vs. first-half average HR, percent change; `NULL` if no HR data |
+| `negative_split` | INTEGER | 0/1/`NULL` — second half faster than the first; `NULL` if too few splits to say |
+| `has_hr` / `has_cadence` / `has_power` | INTEGER | Whether the source device recorded that metric at all |
+| `computed_at` | TEXT | ISO-8601 UTC timestamp |
+
+**`splits_json` shape**, one object per completed kilometre:
+```json
+{
+  "unit": "km",
+  "splits": [
+    {"index": 1, "distance_m": 1001.4, "duration_s": 309.0, "pace_s_per_km": 308.6,
+     "avg_hr": 133, "avg_cadence": 92, "avg_power_w": null, "elev_gain_m": 6.4}
+  ],
+  "partial_last_split_m": 633.1
+}
+```
+Every metric field is independently nullable — a device with no paired
+HR/cadence/power sensor gets `null` on every split, not a dropped row.
+
+**Garmin vs. Wahoo data source — a genuinely different path from track
+signatures, not just relabeled.** Garmin's native GPX embeds heart-rate and
+cadence via a `TrackPointExtension` (element names matched by local name,
+e.g. `hr`/`cad`, not by namespace URI — different exporters use different
+schema URIs for the same convention), so it's parsed straight from GPX.
+Wahoo activities (and old FIT-only Garmin ones) have no native GPX, and
+`map_render.fit_to_gpx()` — built for map/elevation rendering — only
+carries `lat/lon/ele/time` through, silently dropping heart-rate/cadence/
+power. So insights parse FIT `record` messages directly for those, and
+deliberately never go through `fit_to_gpx()`. See `src/insights.py`.
+
+**Backfilling existing activities:** `scripts/backfill_insights.py`, same
+shape as `backfill_track_cells.py` above (idempotent, `--dry-run`/`--limit`,
+never modifies `activities`) — see that section for the exact invocation
+pattern (same `--entrypoint python3` override applies) and the host-path
+quirk it also tolerates.
 
 ---
 

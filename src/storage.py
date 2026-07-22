@@ -115,6 +115,26 @@ CREATE TABLE IF NOT EXISTS activity_track_signatures (
     computed_at   TEXT    NOT NULL
 );
 
+-- Precomputed per-kilometre pace/HR/cadence splits (e.g. for nostra-mcp's
+-- get_activity_insights tool). One row per activity with at least one full
+-- km. Whole-activity aggregates (avg_hr, avg_cadence, avg_power_w, ...)
+-- already exist as columns on activities -- this table holds only the
+-- per-split breakdown and the two derived cross-split flags, not a copy of
+-- what's already there. INSERT OR REPLACE on recompute, same as
+-- activity_track_signatures.
+CREATE TABLE IF NOT EXISTS activity_insights (
+    activity_id    INTEGER PRIMARY KEY REFERENCES activities(id),
+    schema_version INTEGER NOT NULL,   -- bump to force reprocessing on shape changes
+    source_format  TEXT    NOT NULL,   -- 'gpx' | 'fit'
+    splits_json    TEXT    NOT NULL,
+    hr_drift_pct   REAL,               -- null if no HR data
+    negative_split INTEGER,            -- 0/1/null (tri-state -- null if too little data)
+    has_hr         INTEGER NOT NULL,
+    has_cadence    INTEGER NOT NULL,
+    has_power      INTEGER NOT NULL,
+    computed_at    TEXT    NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS kudos_sent (
     status_id   TEXT NOT NULL,
     account_id  TEXT NOT NULL,
@@ -608,6 +628,47 @@ class ActivityStore:
     def has_track_signature(self, activity_id: int) -> bool:
         row = self._conn.execute(
             "SELECT 1 FROM activity_track_signatures WHERE activity_id = ?",
+            (activity_id,),
+        ).fetchone()
+        return row is not None
+
+    # ── Insights (pace / HR / cadence splits) ────────────────────────────────
+
+    def save_insights(
+        self,
+        activity_id: int,
+        schema_version: int,
+        source_format: str,
+        splits_json: dict,
+        hr_drift_pct: float | None,
+        negative_split: bool | None,
+        has_hr: bool,
+        has_cadence: bool,
+        has_power: bool,
+    ) -> None:
+        """Store (or replace) precomputed per-km splits for one activity.
+
+        OR REPLACE, not IGNORE: bumping schema_version and re-running the
+        backfill must overwrite a stale row, not skip it.
+        """
+        self._conn.execute(
+            "INSERT OR REPLACE INTO activity_insights "
+            "(activity_id, schema_version, source_format, splits_json, hr_drift_pct, "
+            " negative_split, has_hr, has_cadence, has_power, computed_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                activity_id, schema_version, source_format, json.dumps(splits_json),
+                hr_drift_pct,
+                None if negative_split is None else int(negative_split),
+                int(has_hr), int(has_cadence), int(has_power),
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+        self._conn.commit()
+
+    def has_insights(self, activity_id: int) -> bool:
+        row = self._conn.execute(
+            "SELECT 1 FROM activity_insights WHERE activity_id = ?",
             (activity_id,),
         ).fetchone()
         return row is not None

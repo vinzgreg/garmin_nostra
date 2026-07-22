@@ -1,26 +1,21 @@
 #!/usr/bin/env python3
-"""One-off backfill: compute activity_track_signatures for existing activities.
+"""One-off backfill: compute activity_insights for existing activities.
 
 Usage (inside the garmin-nostra container):
-    python3 /app/scripts/backfill_track_cells.py /app/config.toml [--dry-run] [--limit N]
+    python3 /app/scripts/backfill_insights.py /app/config.toml [--dry-run] [--limit N]
 
 Safe to re-run: only processes activities with no row yet in
-activity_track_signatures (a LEFT JOIN ... WHERE activity_id IS NULL), so a
-second run touches 0 rows. Never modifies the `activities` table -- every
-write here is additive, into activity_track_signatures only.
+activity_insights (a LEFT JOIN ... WHERE activity_id IS NULL), so a second
+run touches 0 rows. Never modifies the `activities` table -- every write
+here is additive, into activity_insights only.
 
-Garmin activities have a native gpx_path on disk and are read directly.
-Wahoo activities have no gpx_path (see track_signature.py's module
-docstring) -- their track only exists in the .fit file, so it is re-derived
-via map_render.fit_to_gpx() before computing the signature. Activities with
-neither file (e.g. indoor workouts) are skipped -- there is no track to
-compare.
-
-A batch of older Garmin activities (predating the current sync code, still
-using a legacy .fit.gz naming/storage convention) store that FIT file
-gzip-compressed. fitparse cannot read gzip directly, so those bytes are
-transparently gunzipped first -- detected by the gzip magic number, not the
-file extension, since it is a more reliable signal than a name.
+Unlike backfill_track_cells.py, this does NOT route Wahoo/FIT-only
+activities through map_render.fit_to_gpx() -- that conversion only carries
+lat/lon/ele/time through and silently drops heart-rate/cadence/power, which
+is exactly the data insights needs. Rows with a gpx_path are parsed via
+insights.compute_insights_from_gpx(); rows with only a fit_path are parsed
+via insights.compute_insights_from_fit() directly, after the same
+gzip-fallback used by backfill_track_cells.py for legacy .fit.gz files.
 
 Every row is handled in its own try/except: a single corrupt or missing
 file is logged and skipped, never aborts the run.
@@ -36,24 +31,23 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 sys.path.insert(0, str(Path(__file__).parent))
 
-from map_render import fit_to_gpx  # noqa: E402
 from storage import ActivityStore  # noqa: E402
 from sync import load_config  # noqa: E402
-from track_signature import DEFAULT_CELL_SIZE_M, compute_track_cells  # noqa: E402
+from insights import SCHEMA_VERSION, compute_insights_from_fit, compute_insights_from_gpx  # noqa: E402
 from _backfill_common import maybe_gunzip, resolve_path  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-logger = logging.getLogger("backfill_track_cells")
+logger = logging.getLogger("backfill_insights")
 
 
 def _pending_rows(store: ActivityStore) -> list[dict]:
-    """Activities with no signature yet and at least one usable track file."""
+    """Activities with no insights yet and at least one usable track file."""
     rows = store._conn.execute(
         """
         SELECT a.id, a.garmin_activity_id, a.source, a.gpx_path, a.fit_path
         FROM activities a
-        LEFT JOIN activity_track_signatures s ON s.activity_id = a.id
-        WHERE s.activity_id IS NULL
+        LEFT JOIN activity_insights i ON i.activity_id = a.id
+        WHERE i.activity_id IS NULL
           AND a.suppressed IS NULL
           AND (a.gpx_path IS NOT NULL OR a.fit_path IS NOT NULL)
         ORDER BY a.id
@@ -62,8 +56,8 @@ def _pending_rows(store: ActivityStore) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def _gpx_bytes_for(row: dict, gpx_dir: Path, fit_dir: Path) -> tuple[bytes, str] | None:
-    """Return (gpx_bytes, source_format) for one activity row, or None."""
+def _compute_for(row: dict, gpx_dir: Path, fit_dir: Path) -> dict | None:
+    """Return an insights result for one activity row, or None."""
     if row["gpx_path"]:
         path = resolve_path(row["gpx_path"], gpx_dir)
         if path is None:
@@ -71,10 +65,11 @@ def _gpx_bytes_for(row: dict, gpx_dir: Path, fit_dir: Path) -> tuple[bytes, str]
                             row["id"], row["gpx_path"])
             return None
         try:
-            return path.read_bytes(), "gpx"
+            gpx_bytes = path.read_bytes()
         except OSError as exc:
             logger.warning("id=%s: could not read %s: %s", row["id"], path, exc)
             return None
+        return compute_insights_from_gpx(gpx_bytes)
 
     if row["fit_path"]:
         path = resolve_path(row["fit_path"], fit_dir)
@@ -89,14 +84,10 @@ def _gpx_bytes_for(row: dict, gpx_dir: Path, fit_dir: Path) -> tuple[bytes, str]
             return None
         try:
             fit_bytes = maybe_gunzip(fit_bytes)
-        except OSError as exc:  # gzip.BadGzipFile etc. subclass OSError
+        except OSError as exc:
             logger.warning("id=%s: could not decompress %s: %s", row["id"], path, exc)
             return None
-        gpx_bytes = fit_to_gpx(fit_bytes)
-        if gpx_bytes is None:
-            logger.debug("id=%s: fit_to_gpx produced no track (indoor/no-GPS).", row["id"])
-            return None
-        return gpx_bytes, "fit"
+        return compute_insights_from_fit(fit_bytes)
 
     return None
 
@@ -118,7 +109,7 @@ def run(config_path: str, dry_run: bool, limit: int | None) -> None:
         if limit is not None:
             rows = rows[:limit]
         logger.info(
-            "%d activities pending a track signature%s.",
+            "%d activities pending insights%s.",
             len(rows), " (dry run -- nothing will be written)" if dry_run else "",
         )
 
@@ -126,25 +117,24 @@ def run(config_path: str, dry_run: bool, limit: int | None) -> None:
         sample: list[str] = []
         for row in rows:
             try:
-                found = _gpx_bytes_for(row, gpx_dir, fit_dir)
-                if found is None:
+                result = _compute_for(row, gpx_dir, fit_dir)
+                if result is None:
                     skipped += 1
                     continue
-                gpx_bytes, source_format = found
-                signature = compute_track_cells(gpx_bytes)
-                if signature is None:
-                    skipped += 1
-                    continue
-                cells, point_count = signature
                 if not dry_run:
-                    store.save_track_signature(
-                        row["id"], DEFAULT_CELL_SIZE_M, cells, point_count, source_format,
+                    store.save_insights(
+                        row["id"], SCHEMA_VERSION,
+                        result["source_format"], result["splits_json"],
+                        result["hr_drift_pct"], result["negative_split"],
+                        result["has_hr"], result["has_cadence"], result["has_power"],
                     )
                 computed += 1
                 if len(sample) < 5:
+                    n_splits = len(result["splits_json"]["splits"])
                     sample.append(
-                        f"id={row['id']} source={source_format} points={point_count} "
-                        f"cells={cells.count(',') + 1}"
+                        f"id={row['id']} source={result['source_format']} splits={n_splits} "
+                        f"has_hr={result['has_hr']} has_cadence={result['has_cadence']} "
+                        f"has_power={result['has_power']}"
                     )
             except Exception as exc:
                 failed += 1
