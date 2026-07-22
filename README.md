@@ -620,15 +620,32 @@ already there.
 ```json
 {
   "unit": "km",
+  "elev_source": "barometric",
   "splits": [
     {"index": 1, "distance_m": 1001.4, "duration_s": 309.0, "pace_s_per_km": 308.6,
-     "avg_hr": 133, "avg_cadence": 92, "avg_power_w": null, "elev_gain_m": 6.4}
+     "avg_hr": 133, "avg_cadence": 92, "avg_power_w": null,
+     "elev_gain_m": 6.4, "elev_loss_m": 1.2, "avg_grade_pct": 0.5,
+     "max_grade_pct": 3.1, "profile": "flat"}
   ],
   "partial_last_split_m": 633.1
 }
 ```
 Every metric field is independently nullable — a device with no paired
-HR/cadence/power sensor gets `null` on every split, not a dropped row.
+HR/cadence/power sensor gets `null` on every split, not a dropped row; a
+device with no altitude gets `null` on every terrain field.
+
+**Terrain fields (schema v2).** Alongside pace/HR/cadence, each split carries
+the shape of the ground it covered, derived from the elevation series:
+`elev_gain_m`/`elev_loss_m`, `avg_grade_pct` (net, signed), `max_grade_pct`
+(steepest *sustained* climb — measured over a rolling ~100 m window so one
+noisy altitude sample can't invent a cliff), and a coarse `profile` label
+(`climb` / `descent` / `rolling` / `flat`). The top-level `elev_source` is
+`"barometric"` when the FIT stream carried `enhanced_altitude`, else
+`"unknown"` (all GPX, and FIT without an altimeter), so a consumer knows how
+far to trust the grades. Real **surface** type (road vs. gravel vs.
+singletrail) is deliberately *not* inferred — it isn't in the sensor stream
+and guessing it from motion alone is unreliable; that would need map-matching
+against OSM data, a separate future effort.
 
 **Garmin vs. Wahoo data source — a genuinely different path from track
 signatures, not just relabeled.** Garmin's native GPX embeds heart-rate and

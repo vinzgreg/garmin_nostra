@@ -16,18 +16,22 @@ from insights import (  # noqa: E402
     compute_insights_from_fit,
     compute_insights_from_gpx,
     _build_result,
+    _PROFILE_GRADE_PCT,
+    _ROLLING_TOTAL_CHANGE_M,
 )
 
 
 def _gpx(n_points: int, step_m: float = 3.0, start_hr: int = 120, hr_ramp: float = 0.05,
-         cadence: int = 90, include_extensions: bool = True) -> bytes:
+         cadence: int = 90, include_extensions: bool = True,
+         ele_start: float = 500.0, ele_per_point: float = 0.0) -> bytes:
     """Build a synthetic GPX track heading due north at a small, fixed step.
 
     Varying latitude (not longitude) keeps the metres-per-degree conversion
     constant regardless of location -- ~1 degree of latitude is ~111320m
     everywhere, unlike longitude, which shrinks by cos(latitude). Steps are
     tiny so n_points * step_m metres accumulate over the track, one point
-    per second.
+    per second. ``ele_per_point`` ramps elevation by a fixed amount each
+    point (positive = climbing) so terrain/grade output can be exercised.
     """
     start = datetime(2026, 1, 1, 10, 0, 0, tzinfo=timezone.utc)
     deg_per_m = 1.0 / 111320.0
@@ -38,7 +42,8 @@ def _gpx(n_points: int, step_m: float = 3.0, start_hr: int = 120, hr_ramp: float
         lat = 48.1000 + i * step_m * deg_per_m
         t = (start + timedelta(seconds=i)).strftime("%Y-%m-%dT%H:%M:%SZ")
         hr = int(start_hr + i * hr_ramp)
-        lines.append(f'<trkpt lat="{lat:.8f}" lon="11.6000"><ele>500</ele><time>{t}</time>')
+        ele = ele_start + i * ele_per_point
+        lines.append(f'<trkpt lat="{lat:.8f}" lon="11.6000"><ele>{ele:.2f}</ele><time>{t}</time>')
         if include_extensions:
             lines.append(
                 f"<extensions><ns3:TrackPointExtension>"
@@ -107,6 +112,70 @@ def test_hr_drift_detected_with_enough_splits():
     assert result["hr_drift_pct"] > 0  # HR rose over the activity
 
 
+# ── Terrain / grade (v2) ─────────────────────────────────────────────────────
+
+def test_climb_profile_and_grade():
+    # 400 pts * 3m = 1200m, +0.15m elevation/point == a steady 5% climb.
+    result = compute_insights_from_gpx(_gpx(400, ele_per_point=0.15))
+    split = result["splits_json"]["splits"][0]
+    assert split["profile"] == "climb"
+    assert split["avg_grade_pct"] == pytest.approx(5.0, abs=0.3)
+    assert split["max_grade_pct"] == pytest.approx(5.0, abs=0.5)
+    assert split["elev_gain_m"] > 45
+    assert split["elev_loss_m"] == 0.0
+    # GPX gives no reliable elevation provenance.
+    assert result["splits_json"]["elev_source"] == "unknown"
+
+
+def test_descent_profile_and_negative_grade():
+    result = compute_insights_from_gpx(_gpx(400, ele_per_point=-0.15))
+    split = result["splits_json"]["splits"][0]
+    assert split["profile"] == "descent"
+    assert split["avg_grade_pct"] == pytest.approx(-5.0, abs=0.3)
+    assert split["elev_loss_m"] > 45
+    assert split["elev_gain_m"] == 0.0
+
+
+def test_flat_profile():
+    result = compute_insights_from_gpx(_gpx(400))  # constant elevation
+    split = result["splits_json"]["splits"][0]
+    assert split["profile"] == "flat"
+    assert split["avg_grade_pct"] == pytest.approx(0.0, abs=0.1)
+    assert split["elev_gain_m"] == 0.0
+    assert split["elev_loss_m"] == 0.0
+
+
+def test_rolling_profile_low_net_high_churn():
+    # Elevation climbs then returns: near-zero net grade, but lots of up+down.
+    base = datetime(2026, 1, 1, 10, 0, 0, tzinfo=timezone.utc)
+    points = [
+        {"distance_m": i * 3.0, "time": base + timedelta(seconds=i),
+         "elevation": 500.0 + min(i, 400 - i) * 0.15,
+         "hr": None, "cadence": None, "power": None}
+        for i in range(400)
+    ]
+    result = _build_result(points)
+    split = result["splits_json"]["splits"][0]
+    assert split["profile"] == "rolling"
+    assert abs(split["avg_grade_pct"]) < _PROFILE_GRADE_PCT
+    assert split["elev_gain_m"] > _ROLLING_TOTAL_CHANGE_M / 2
+    assert split["elev_loss_m"] > 0.0
+
+
+def test_no_elevation_yields_null_terrain():
+    base = datetime(2026, 1, 1, 10, 0, 0, tzinfo=timezone.utc)
+    points = [
+        {"distance_m": i * 3.0, "time": base + timedelta(seconds=i),
+         "elevation": None, "hr": None, "cadence": None, "power": None}
+        for i in range(400)
+    ]
+    split = _build_result(points)["splits_json"]["splits"][0]
+    assert split["elev_gain_m"] is None
+    assert split["avg_grade_pct"] is None
+    assert split["max_grade_pct"] is None
+    assert split["profile"] is None
+
+
 def test_malformed_gpx_returns_none():
     assert compute_insights_from_gpx(b"not xml at all") is None
 
@@ -128,7 +197,8 @@ _Field = namedtuple("_Field", ["name", "value"])
 
 
 def _fit_records(n_points: int, step_m: float = 3.0, start_hr: int = 120,
-                 hr_ramp: float = 0.1, cadence: int = 85, power: int | None = None):
+                 hr_ramp: float = 0.1, cadence: int = 85, power: int | None = None,
+                 enhanced_altitude: bool = False):
     """Build fake FIT `record` messages, one per second heading a fixed step.
 
     Each 'record' is just an iterable of _Field(name, value) — matching how
@@ -144,6 +214,8 @@ def _fit_records(n_points: int, step_m: float = 3.0, start_hr: int = 120,
             _Field("heart_rate", int(start_hr + i * hr_ramp)),
             _Field("cadence", cadence),
         ]
+        if enhanced_altitude:
+            fields.append(_Field("enhanced_altitude", 500.0))
         if power is not None:
             fields.append(_Field("power", power))
         records.append(fields)
@@ -172,6 +244,20 @@ def test_compute_insights_from_fit_full(MockFitFile):
     assert split["avg_cadence"] == 85
     assert split["avg_power_w"] == pytest.approx(180.0)
     assert split["pace_s_per_km"] is not None
+
+
+@patch("insights.fitparse.FitFile")
+def test_fit_elev_source_barometric_when_enhanced_present(MockFitFile):
+    MockFitFile.return_value = _FakeFit(_fit_records(700, enhanced_altitude=True))
+    result = compute_insights_from_fit(b"ignored-bytes")
+    assert result["splits_json"]["elev_source"] == "barometric"
+
+
+@patch("insights.fitparse.FitFile")
+def test_fit_elev_source_unknown_without_enhanced(MockFitFile):
+    MockFitFile.return_value = _FakeFit(_fit_records(700, enhanced_altitude=False))
+    result = compute_insights_from_fit(b"ignored-bytes")
+    assert result["splits_json"]["elev_source"] == "unknown"
 
 
 @patch("insights.fitparse.FitFile")
